@@ -5,7 +5,11 @@
 //   2. 画面遷移はネットワークを 3 秒だけ待ち、駄目ならキャッシュへ落とす
 //   3. Supabase への通信には触らない(同期は store.ts の outbox が受け持つ)
 
-const VERSION = "v1";
+// 画面の作りを変えたら、ここの番号を1つ上げてから本番へ出す。
+// このファイルの中身が変わると、ブラウザが新しい Service Worker として入れ直し、
+// 古いキャッシュ(activate で削除)ごと画面を作り直す。
+// 上げ忘れると、圏外で起動したときだけ古い画面が出る。
+const VERSION = "v2";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 3000;
