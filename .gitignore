@@ -38,6 +38,8 @@ yarn-error.log*
 # Cowork スキルが持つ接続情報とログイントークン
 cowork/jisui/.env
 cowork/jisui/.token.json
+__pycache__/
+*.pyc
 
 # vercel
 .vercel

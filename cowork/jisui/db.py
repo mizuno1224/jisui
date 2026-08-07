@@ -25,8 +25,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date as _date
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
+
+
+def _add_days(iso: str, days: int) -> str:
+    return (_date.fromisoformat(iso) + timedelta(days=days)).isoformat()
 
 CONFIG_NAME = ".env"
 TOKEN_CACHE = Path(__file__).with_name(".token.json")
@@ -136,9 +142,19 @@ class Jisui:
 
     # ------------------------------------------------------ 基本の読み書き
 
-    def select(self, table: str, select: str = "*", **filters: str) -> list[dict]:
-        """filters は PostgREST の書き方。例: status="eq.未購入", date="gte.2026-08-01" """
-        params = {"select": select, **filters}
+    def select(self, table: str, select: str = "*", **filters: Any) -> list[dict]:
+        """
+        filters は PostgREST の書き方。例: status="eq.未購入"
+
+        同じ列に2つ条件を付けたいときはリストで渡す(AND になる)。
+            date=["gte.2026-08-01", "lte.2026-08-07"]
+        """
+        params: list[tuple[str, str]] = [("select", select)]
+        for key, value in filters.items():
+            if isinstance(value, (list, tuple)):
+                params.extend((key, str(v)) for v in value)
+            else:
+                params.append((key, str(value)))
         query = urllib.parse.urlencode(params)
         return _request("GET", f"{self.url}/rest/v1/{table}?{query}", self._headers()) or []
 
@@ -203,6 +219,38 @@ class Jisui:
     def add_inventory(self, items: list[dict]) -> list[dict]:
         """在庫に足す。{"name","qty","unit","location","expiry","price","bought_on"}"""
         return self.insert("inventory", items)
+
+    def week(self, start_date: str, days: int = 7) -> dict:
+        """
+        ある期間の献立・予定・家事をまとめて取る。「来週の予定は?」に答えるとき用。
+        アプリのカレンダー画面と同じものが見える。
+        """
+        end = _add_days(start_date, days - 1)
+        span = [f"gte.{start_date}", f"lte.{end}"]
+        return {
+            "献立": self.select("meal_plan", "date,slot,name,status", date=span, order="date"),
+            "予定": self.select(
+                "events", "id,date,end_date,start_time,title,owner_id", date=span, order="date"
+            ),
+            "家事": self.select("chores", "id,name,weekdays,monthday,assignee_id", active="eq.true"),
+            "家事の記録": self.select("chore_log", "chore_id,date,done_by", date=span),
+        }
+
+    def money(self, year_month: str) -> dict:
+        """その月の家計。支出・収入・予算・資産をまとめて見る。"""
+        span = [f"gte.{year_month}-01", f"lte.{year_month}-31"]
+        return {
+            "支出": self.select(
+                "transactions",
+                "date,amount,merchant_raw,category,source,needs_review",
+                date=span,
+                order="date.desc",
+            ),
+            "収入": self.select("income", "date,amount,source", date=span),
+            "予算": self.select("budgets", "category,amount,year_month"),
+            "口座・資産・負債": self.select("accounts", "id,name,kind,category", active="eq.true"),
+            "残高": self.select("balances", "account_id,year_month,amount", year_month=f"eq.{year_month}"),
+        }
 
     @staticmethod
     def dedup_hash(date: str, amount: int, merchant_raw: str) -> str:

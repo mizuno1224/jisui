@@ -38,7 +38,7 @@ const TABS = [
   },
   {
     href: "/plan",
-    label: "献立",
+    label: "予定",
     icon: (
       <>
         <rect x="3.5" y="5" width="17" height="16" rx="2" />

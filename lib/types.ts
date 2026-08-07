@@ -123,3 +123,94 @@ export type Transaction = {
   needs_review: boolean;
   imported_at: string;
 };
+
+export type Budget = {
+  id: number;
+  household_id: string;
+  category: string;
+  amount: number;
+  /** null = 毎月の既定。'2026-08' ならその月だけの上書き */
+  year_month: string | null;
+};
+
+export type Account = {
+  id: number;
+  household_id: string;
+  name: string;
+  kind: "資産" | "負債";
+  category: string | null;
+  memo: string | null;
+  sort_order: number;
+  active: boolean;
+};
+
+export type Balance = {
+  id: number;
+  household_id: string;
+  account_id: number;
+  year_month: string;
+  amount: number;
+};
+
+export type Income = {
+  id: number;
+  household_id: string;
+  date: string;
+  amount: number;
+  source: string;
+  category: string | null;
+  memo: string | null;
+};
+
+// ------------------------------------------------------------ 予定・家事
+
+export type CalendarEvent = {
+  id: number;
+  household_id: string;
+  date: string;
+  end_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  title: string;
+  memo: string | null;
+  /** null = 2人の共有予定 / user_id = その人の個人予定 */
+  owner_id: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type Chore = {
+  id: number;
+  household_id: string;
+  name: string;
+  /** 0=日 〜 6=土 */
+  weekdays: number[];
+  monthday: number | null;
+  assignee_id: string | null;
+  memo: string | null;
+  active: boolean;
+  sort_order: number;
+};
+
+export type ChoreLog = {
+  id: number;
+  household_id: string;
+  chore_id: number;
+  date: string;
+  done_by: string | null;
+  done_at: string;
+};
+
+/** 支出の費目。予算と突き合わせるため、アプリ側でも一覧を持っておく。 */
+export const EXPENSE_CATEGORIES = [
+  "食費",
+  "日用品",
+  "外食",
+  "交通・車",
+  "住居",
+  "光熱・通信",
+  "医療",
+  "娯楽",
+  "衣類",
+  "その他",
+] as const;
