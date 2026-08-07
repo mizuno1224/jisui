@@ -9,12 +9,23 @@
 // このファイルの中身が変わると、ブラウザが新しい Service Worker として入れ直し、
 // 古いキャッシュ(activate で削除)ごと画面を作り直す。
 // 上げ忘れると、圏外で起動したときだけ古い画面が出る。
-const VERSION = "v2";
+const VERSION = "v3";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 3000;
 
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
+// タブは5つとも圏外で開けるようにしておく。1つでも欠けると、
+// そのタブだけ「/」(買い物リスト)が出てしまい、壊れたように見える。
+const APP_SHELL = [
+  "/",
+  "/inventory",
+  "/recipes",
+  "/plan",
+  "/spending",
+  "/manifest.webmanifest",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

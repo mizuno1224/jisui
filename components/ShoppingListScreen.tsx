@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AddItemSheet } from "@/components/AddItemSheet";
+import { MoveToInventorySheet } from "@/components/MoveToInventorySheet";
 import { StatusChips } from "@/components/StatusChips";
 import { ItemRow } from "@/components/ItemRow";
 import {
@@ -21,6 +22,7 @@ export function ShoppingListScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [actionTarget, setActionTarget] = useState<ShoppingItem | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
 
   const { items, userId, members } = snapshot;
@@ -55,6 +57,8 @@ export function ShoppingListScreen() {
   // セール枠は「安ければ買う」候補なので残り件数に含めない(設計書 3-2)
   const counted = items.filter((i) => normalizeSection(i.section) !== SALE_SECTION);
   const remaining = counted.filter((i) => i.status === "未購入").length;
+  // 在庫へ流し込む対象。セール枠で買ったものも含める(買ったことに変わりはない)
+  const checkedItems = items.filter((i) => i.status === "購入済");
   const done = counted.length - remaining;
   const progress = counted.length === 0 ? 0 : (done / counted.length) * 100;
 
@@ -96,7 +100,7 @@ export function ShoppingListScreen() {
   }
 
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-32 dark:bg-neutral-950">
+    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <header
         ref={headerRef}
         className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95"
@@ -131,7 +135,19 @@ export function ShoppingListScreen() {
                   className="fixed inset-0 z-10 cursor-default"
                   onClick={() => setMenuOpen(false)}
                 />
-                <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
+                <div className="absolute right-0 z-20 mt-1 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
+                  {checkedItems.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setMoveOpen(true);
+                      }}
+                      className="block h-12 w-full border-b border-neutral-100 px-4 text-left text-sm font-semibold text-emerald-700 active:bg-neutral-100 dark:border-neutral-700 dark:text-emerald-400 dark:active:bg-neutral-700"
+                    >
+                      買った分を在庫に入れる({checkedItems.length})
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -227,7 +243,7 @@ export function ShoppingListScreen() {
         type="button"
         aria-label="品目を追加"
         onClick={() => setAddOpen(true)}
-        className="fixed bottom-[calc(env(safe-area-inset-bottom)+1.25rem)] right-5 z-40 flex size-16 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg active:bg-emerald-700"
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] right-5 z-40 flex size-16 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg active:bg-emerald-700"
       >
         <svg viewBox="0 0 24 24" className="size-8" fill="none" stroke="currentColor" strokeWidth={2.5}>
           <path d="M12 5v14M5 12h14" strokeLinecap="round" />
@@ -235,6 +251,10 @@ export function ShoppingListScreen() {
       </button>
 
       {addOpen && <AddItemSheet onClose={() => setAddOpen(false)} onSubmit={handleAdd} />}
+
+      {moveOpen && (
+        <MoveToInventorySheet checked={checkedItems} onClose={() => setMoveOpen(false)} />
+      )}
 
       {actionTarget && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end">

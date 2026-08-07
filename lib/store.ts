@@ -10,7 +10,13 @@ import * as local from "./local-db";
 import { LOCAL_HOUSEHOLD_ID, localSeedItems } from "./seed-data";
 import { sectionRank } from "./sections";
 import { getSupabase, isSupabaseConfigured } from "./supabase/client";
-import { isTempId, type ItemId, type Op, type ShoppingItem } from "./types";
+import {
+  isTempId,
+  type ItemId,
+  type Op,
+  type QueuedOp,
+  type ShoppingItem,
+} from "./types";
 
 const TABLE = "shopping_list";
 const META_HOUSEHOLD = "household_id";
@@ -97,7 +103,7 @@ function upsertLocalState(row: ShoppingItem) {
 }
 
 async function refreshPending() {
-  const ops = await local.loadOutbox();
+  const ops = await local.loadOutbox<QueuedOp>("items");
   emit({ pending: ops.length });
   return ops;
 }
@@ -127,7 +133,7 @@ export async function init() {
   });
 
   // まず手元のデータで描く。ここまでにネットワークは一切使わない。
-  const cached = await local.loadItems();
+  const cached = await local.loadRows<ShoppingItem>("items");
   setItems(cached);
   await refreshPending();
 
@@ -135,7 +141,7 @@ export async function init() {
   if (!supabase) {
     if (cached.length === 0) {
       const seeded = localSeedItems(new Date().toISOString());
-      await local.replaceItems(seeded);
+      await local.replaceRows("items", seeded);
       setItems(seeded);
     }
     emit({ status: "ready", mode: "local", householdId: LOCAL_HOUSEHOLD_ID });
@@ -216,9 +222,9 @@ async function flushOutbox() {
   if (!supabase) return;
 
   // add で採番された id を後続の操作へ貼り替えるため、1件ずつ読み直す。
-  let guard = (await local.loadOutbox()).length + 10;
+  let guard = (await local.loadOutbox<QueuedOp>("items")).length + 10;
   while (guard-- > 0) {
-    const ops = await local.loadOutbox();
+    const ops = await local.loadOutbox<QueuedOp>("items");
     const op = ops[0];
     if (!op) break;
 
@@ -274,9 +280,9 @@ async function sendOp(op: Op) {
       row = data as ShoppingItem;
     }
 
-    await local.removeItem(op.tempId);
-    await local.saveItems([row]);
-    await local.remapOutboxId(op.tempId, row.id);
+    await local.removeRow("items", op.tempId);
+    await local.saveRows("items", [row]);
+    await local.remapOutboxId("items", op.tempId, row.id);
     const rest = snapshot.items.filter((i) => String(i.id) !== op.tempId);
     setItems([...rest, row]);
     return;
@@ -326,7 +332,7 @@ async function pull() {
     .abortSignal(abortAfterTimeout());
   if (error) throw error;
 
-  const ops = await local.loadOutbox();
+  const ops = await local.loadOutbox<QueuedOp>("items");
   const pendingIds = new Set(
     ops.map((op) => ("id" in op ? String(op.id) : op.tempId)),
   );
@@ -344,7 +350,7 @@ async function pull() {
   );
 
   const next = [...merged, ...localOnly];
-  await local.replaceItems(next);
+  await local.replaceRows("items", next);
   setItems(next);
 }
 
@@ -359,13 +365,13 @@ function bindRealtime() {
       "postgres_changes",
       { event: "*", schema: "public", table: TABLE },
       async (payload) => {
-        const ops = await local.loadOutbox();
+        const ops = await local.loadOutbox<QueuedOp>("items");
         const pendingIds = new Set(ops.map((op) => ("id" in op ? String(op.id) : op.tempId)));
 
         if (payload.eventType === "DELETE") {
           const id = (payload.old as { id?: ItemId })?.id;
           if (id == null) return;
-          await local.removeItem(id);
+          await local.removeRow("items", id);
           setItems(snapshot.items.filter((i) => String(i.id) !== String(id)));
           return;
         }
@@ -374,7 +380,7 @@ function bindRealtime() {
         if (!row?.id) return;
         // 自分の未送信操作があるうちは、相手の更新で上書きしない
         if (pendingIds.has(String(row.id))) return;
-        await local.saveItems([row]);
+        await local.saveRows("items", [row]);
         upsertLocalState(row);
       },
     )
@@ -385,7 +391,7 @@ function bindRealtime() {
 
 async function queue(op: Op) {
   if (snapshot.mode !== "cloud" || !snapshot.signedIn) return;
-  await local.enqueue(op);
+  await local.enqueue("items", op);
   await refreshPending();
   void syncNow();
 }
@@ -401,7 +407,7 @@ export async function toggle(id: ItemId) {
     ? { ...item, status: "購入済", checked_by: snapshot.userId, checked_at: at }
     : { ...item, status: "未購入", checked_by: null, checked_at: null };
 
-  await local.saveItems([next]);
+  await local.saveRows("items", [next]);
   upsertLocalState(next);
   await queue(checking ? { kind: "check", id, at, by: snapshot.userId } : { kind: "uncheck", id, at });
 }
@@ -432,13 +438,13 @@ export async function addItem(input: NewItem) {
     added_at: new Date().toISOString(),
   };
 
-  await local.saveItems([row]);
+  await local.saveRows("items", [row]);
   upsertLocalState(row);
   await queue({ kind: "add", tempId: row.id as string, item: row });
 }
 
 export async function removeItem(id: ItemId) {
-  await local.removeItem(id);
+  await local.removeRow("items", id);
   setItems(snapshot.items.filter((i) => String(i.id) !== String(id)));
   await queue({ kind: "delete", id });
 }
@@ -446,6 +452,6 @@ export async function removeItem(id: ItemId) {
 export async function signOut() {
   const supabase = getSupabase();
   await supabase?.auth.signOut();
-  await local.replaceItems([]);
+  await local.replaceRows("items", []);
   emit({ items: [], signedIn: false, userId: null, members: {}, householdId: null });
 }

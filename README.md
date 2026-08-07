@@ -1,14 +1,26 @@
-# jisui — 買い物リスト(フェーズ1)
+# jisui — 夫婦2人の自炊管理
 
-設計書.md のフェーズ1。スーパーでのチェックが確実に記録されるところまで。
+設計書.md の実装。スマホのホーム画面から使う PWA。
 
-- 買い物リスト画面(売り場順・行全体タップ・残り件数・セール枠は別扱い)
-- オフライン優先。チェックはまず手元(IndexedDB)に書き、通信は後追いで流す
-- 夫婦2人のリアルタイム同期(Supabase Realtime)
-- PWA。ホーム画面から起動できる
+| タブ | できること |
+|---|---|
+| **買い物** | 売り場順・行全体タップ・残り件数・セール枠は別枠。**オフラインでも動く** |
+| **在庫** | 冷蔵/冷凍/常温・+/- で増減・期限警告・使う予定の献立を併記 |
+| **レシピ** | カード表示(なぜまで解説)・材料と在庫の突き合わせ・足りない分を買い物リストへ |
+| **献立** | 予定と実績・作った記録・調理履歴 |
+| **家計** | 今月の費目別・**1食あたりコスト**・重複確認が必要な行 |
 
-在庫・レシート・家計簿(フェーズ2以降)はまだ入っていない。DBのスキーマだけは
-先に入れておける(下記のSQL 4本)。
+### AI機能はアプリに入れていない
+
+レシート読み取り・献立提案・レシピ生成は **Cowork(チャット)側**で行う(設計書 3-4)。
+アプリに Claude API キーを持たせると別料金になるが、チャットは購読の範囲で動くため。
+チャットから同じ Supabase を読み書きする道具は `cowork/jisui/` にある。
+
+| やること | どこで | なぜ |
+|---|---|---|
+| 買い物中のチェック、在庫の増減 | アプリ | 片手で1タップ。オフラインでも動く |
+| レシート20点の一括登録 | チャット | 写真1枚で金額込み全件が入る |
+| 献立の相談・レシピ生成 | チャット | 会話で条件を足していける |
 
 ---
 
@@ -132,15 +144,35 @@ Service Worker はアプリ本体をキャッシュしているが、`sw.js` の
 ## ファイルの見取り図
 
 ```
-app/                 画面(/ = 買い物リスト、/login)
-components/          画面部品
-lib/store.ts         状態と同期の中心。ここを読めば挙動が分かる
-lib/local-db.ts      IndexedDB(items / outbox / meta)
-lib/supabase/        クライアント。環境変数が無ければ null を返す
-public/sw.js         Service Worker(手書き。ライブラリなし)
-scripts/gen-icons.mjs アイコン生成 → npm run gen:icons
-*.sql                Supabase に流すもの(設計書と同梱)
+app/                    画面(/ 買い物、/inventory、/recipes、/plan、/spending、/login)
+components/             画面部品。BottomNav が5つのタブ
+lib/store.ts            買い物リストの状態と同期。ここを読めば挙動が分かる
+lib/inventory-store.ts  在庫。store.ts と同じ「まず手元、送信は後追い」
+lib/use-table.ts        読み取り中心のデータ(レシピ・献立・取引)の共通処理
+lib/local-db.ts         IndexedDB(items / inventory / outbox / cache / meta)
+lib/mutations.ts        献立・調理記録の書き込み(オンライン時のみ)
+lib/matching.ts         在庫名と材料名のゆるい突き合わせ
+lib/supabase/           クライアント。環境変数が無ければ null を返す
+public/sw.js            Service Worker(手書き。画面を変えたら VERSION を上げる)
+scripts/gen-icons.mjs   アイコン生成 → npm run gen:icons
+cowork/jisui/           チャット側から同じ Supabase を触るための道具
+*.sql                   Supabase に流すもの(設計書と同梱)
 ```
+
+## SQL の実行順
+
+| 順 | ファイル | 備考 |
+|---|---|---|
+| 1 | `schema.sql` | テーブルと RLS |
+| 2 | `seed.sql` | 既存データ |
+| 3 | `patch_members.sql` | 相手の表示名を読めるようにする(任意) |
+| 4 | `schema_kakeibo.sql` | 家計簿(支出のみ) |
+| 5 | `seed_kakeibo.sql` | 取引155件・分類辞書67件 |
+| 6 | **`patch_views_rls.sql`** | **必須。** ビューが RLS を迂回する穴をふさぐ |
+
+6 番は後から見つかった問題の修正。素の `schema_kakeibo.sql` が作るビューは
+PostgreSQL の既定で「作成者の権限」で動くため、**ログインしていない相手にも
+家計データを返してしまう**。公開鍵は誰でも読めるので実害がある。必ず当てる。
 
 ## 次にやること(設計書 フェーズ2以降)
 

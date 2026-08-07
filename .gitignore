@@ -33,6 +33,11 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.local.example
+!cowork/jisui/.env.example
+
+# Cowork スキルが持つ接続情報とログイントークン
+cowork/jisui/.env
+cowork/jisui/.token.json
 
 # vercel
 .vercel
