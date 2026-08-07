@@ -49,6 +49,7 @@ function expiryBadge(expiry: string | null) {
 export function InventoryScreen() {
   const snapshot = useInventory();
   const [tab, setTab] = useState<Location>("冷蔵");
+  const [query, setQuery] = useState("");
   const [target, setTarget] = useState<InventoryItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -71,10 +72,12 @@ export function InventoryScreen() {
     };
   }, [plans.rows, ingredients.rows]);
 
-  const byLocation = useMemo(
-    () => snapshot.items.filter((i) => i.location === tab),
-    [snapshot.items, tab],
-  );
+  // 検索中は場所のタブを跨いで探す(「あれどこだっけ」に答えるのが目的なので)
+  const byLocation = useMemo(() => {
+    const q = query.trim();
+    if (q) return snapshot.items.filter((i) => i.name.includes(q));
+    return snapshot.items.filter((i) => i.location === tab);
+  }, [snapshot.items, tab, query]);
 
   const soon = snapshot.items.filter(
     (i) => i.expiry && daysUntil(i.expiry) <= 3,
@@ -87,7 +90,7 @@ export function InventoryScreen() {
         subtitle={
           <>
             {snapshot.items.length}
-            <span className="text-base font-medium text-neutral-400"> 点</span>
+            <span className="text-base font-medium text-neutral-500 dark:text-neutral-400"> 点</span>
           </>
         }
         right={
@@ -107,7 +110,17 @@ export function InventoryScreen() {
             期限が近いものが {soon} 点あります
           </p>
         )}
-        <div className="mt-3 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="食材を探す(場所を問わず)"
+          className="mt-2 h-11 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base outline-none focus:border-emerald-500 dark:border-neutral-700 dark:bg-neutral-800"
+        />
+        <div
+          className={`mt-3 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800 ${
+            query.trim() ? "opacity-40" : ""
+          }`}
+        >
           {LOCATIONS.map((loc) => {
             const count = snapshot.items.filter((i) => i.location === loc).length;
             return (
@@ -122,7 +135,7 @@ export function InventoryScreen() {
                 }`}
               >
                 {loc}
-                <span className="ml-1 text-xs font-normal text-neutral-400">{count}</span>
+                <span className="ml-1 text-xs font-normal text-neutral-500 dark:text-neutral-400">{count}</span>
               </button>
             );
           })}
@@ -133,7 +146,11 @@ export function InventoryScreen() {
         loading={snapshot.status === "loading"}
         error={snapshot.error}
         empty={byLocation.length === 0}
-        emptyText={`${tab}は空です。右下の + で追加できます。`}
+        emptyText={
+          query.trim()
+            ? `「${query.trim()}」は見つかりませんでした。`
+            : `${tab}は空です。右下の + で追加できます。`
+        }
       />
 
       <ul className="mt-3 divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
@@ -148,7 +165,24 @@ export function InventoryScreen() {
                 className="min-w-0 flex-1 text-left"
               >
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-[17px] font-semibold leading-tight">{item.name}</span>
+                  <span
+                    className={`text-[17px] font-semibold leading-tight ${
+                      (item.qty ?? 0) === 0 ? "text-neutral-500 dark:text-neutral-400" : ""
+                    }`}
+                  >
+                    {item.name}
+                  </span>
+                  {(item.qty ?? 0) === 0 && (
+                    <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-neutral-600 dark:bg-neutral-700 dark:text-neutral-200">
+                      切らしている
+                    </span>
+                  )}
+                  {/* 検索中は場所を跨ぐので、どこにあるかを出さないと役に立たない */}
+                  {query.trim() && (
+                    <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
+                      {item.location}
+                    </span>
+                  )}
                   {badge && (
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
                       {badge.text}
@@ -177,7 +211,7 @@ export function InventoryScreen() {
                 </button>
                 <span className="w-14 text-center text-sm font-bold tabular-nums">
                   {item.qty ?? "-"}
-                  <span className="ml-0.5 text-[11px] font-normal text-neutral-400">
+                  <span className="ml-0.5 text-[11px] font-normal text-neutral-500 dark:text-neutral-400">
                     {item.unit ?? ""}
                   </span>
                 </span>
@@ -241,6 +275,9 @@ function ItemActionSheet({
 }) {
   const [qty, setQtyInput] = useState(String(item.qty ?? ""));
   const [expiry, setExpiryInput] = useState(item.expiry ?? "");
+  // 以前は押した瞬間に保存していたので、そのまま閉じても場所だけ変わっていた。
+  // 数量・期限と同じく「保存」で確定する。
+  const [location, setLocationInput] = useState<Location>(item.location);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
@@ -278,9 +315,9 @@ function ItemActionSheet({
               <button
                 key={loc}
                 type="button"
-                onClick={() => void setLocation(item.id, loc)}
+                onClick={() => setLocationInput(loc)}
                 className={`h-11 flex-1 rounded-lg text-sm font-semibold ${
-                  item.location === loc
+                  location === loc
                     ? "bg-white shadow-sm dark:bg-neutral-700"
                     : "text-neutral-500"
                 }`}
@@ -297,6 +334,7 @@ function ItemActionSheet({
             const n = Number(qty);
             if (!Number.isNaN(n)) void setQty(item.id, n);
             void setExpiry(item.id, expiry || null);
+            if (location !== item.location) void setLocation(item.id, location);
             onDone();
           }}
           className="mt-5 h-14 w-full rounded-xl bg-emerald-600 text-base font-bold text-white"
@@ -305,14 +343,25 @@ function ItemActionSheet({
         </button>
         <button
           type="button"
-          onClick={() => {
-            void removeItem(item.id);
-            onDone();
-          }}
-          className="mt-2 h-14 w-full rounded-xl bg-rose-50 text-base font-bold text-rose-600 dark:bg-rose-950/50"
+          onClick={onClose}
+          className="mt-2 h-14 w-full rounded-xl bg-neutral-100 text-base font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
         >
-          使い切った(削除)
+          やめる
         </button>
+
+        {/* 削除は不可逆なので、保存から離して置く。濡れた指で滑って消さないため */}
+        <div className="mt-6 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <button
+            type="button"
+            onClick={() => {
+              void removeItem(item.id);
+              onDone();
+            }}
+            className="h-14 w-full rounded-xl bg-rose-50 text-base font-bold text-rose-600 dark:bg-rose-950/50"
+          >
+            使い切った(削除)
+          </button>
+        </div>
       </div>
     </div>
   );

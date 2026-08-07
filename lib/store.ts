@@ -21,13 +21,19 @@ import {
 const TABLE = "shopping_list";
 const META_HOUSEHOLD = "household_id";
 const META_MEMBERS = "members";
+/** 過去に足した品目。次に足すとき打ち直さずに済むよう、この端末に覚えておく。 */
+const META_RECENT = "recent_items";
+const RECENT_LIMIT = 40;
+/** 一度ログインできたか。圏外でトークンの確認が取れないときの判断に使う。 */
+const META_SIGNED_IN = "signed_in_once";
+const META_USER_ID = "user_id";
 
 /**
  * 通信を打ち切るまでの時間。
  * スーパーの中は「電波は立っているのに通らない」ことがあり、
  * navigator.onLine は true のままなので、応答が返らない場合に備えて必ず切る。
  */
-const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 const abortAfterTimeout = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 export type Snapshot = {
@@ -44,6 +50,8 @@ export type Snapshot = {
   householdId: string | null;
   members: Record<string, string>;
   error: string | null;
+  /** サーバに拒否されて捨てた操作。error と違い、同期成功では消さない。 */
+  discarded: { label: string; message: string }[];
   lastSyncedAt: string | null;
 };
 
@@ -59,6 +67,7 @@ const INITIAL: Snapshot = {
   householdId: null,
   members: {},
   error: null,
+  discarded: [],
   lastSyncedAt: null,
 };
 
@@ -113,6 +122,33 @@ function errorMessage(e: unknown): string {
   return String(e);
 }
 
+/**
+ * サーバに拒否されたのか、単に届かなかったのかを見分ける。
+ *
+ * ここを間違えると店内で実害が出る。postgrest-js は通信失敗・中断のときも
+ * error を返すが、その中身は code:"" / status:0 になる。
+ * 「code が文字列なら拒否」と見ていたため、電波が弱くてタイムアウトした
+ * チェック操作が拒否扱いで捨てられ、次の pull でサーバ側の「未購入」に
+ * 上書きされて、つけたはずのチェックが黙って消えていた。
+ *
+ * 拒否と言えるのは、Postgres のエラーコードが実際に入っていて、
+ * かつ HTTP 応答が返ってきている(status が 0 でない)ときだけ。
+ */
+export function isPermanent(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const { code, status } = e as { code?: unknown; status?: unknown };
+  if (typeof code !== "string" || code === "") return false;
+  if (status === 0) return false;
+  return true;
+}
+
+function describeOp(op: Op): string {
+  if (op.kind === "add") return `${op.item.item} の追加`;
+  if (op.kind === "check") return "チェック";
+  if (op.kind === "uncheck") return "チェック解除";
+  return "削除";
+}
+
 // ------------------------------------------------------------------ 初期化
 
 let initialized = false;
@@ -148,34 +184,102 @@ export async function init() {
     return;
   }
 
-  // 前回の世帯 id / メンバー名は手元に残しておく(圏外でも追加できるように)
+  // 前回の世帯 id / メンバー名・ログイン実績は手元に残してある。
+  // これがあれば、圏外でトークンの確認が取れなくても操作を受け付けられる。
+  const knownHousehold = (await local.getMeta<string>(META_HOUSEHOLD)) ?? null;
+  const signedInBefore = (await local.getMeta<boolean>(META_SIGNED_IN)) ?? false;
+  const knownUserId = (await local.getMeta<string>(META_USER_ID)) ?? null;
   emit({
-    householdId: (await local.getMeta<string>(META_HOUSEHOLD)) ?? null,
+    householdId: knownHousehold,
     members: (await local.getMeta<Record<string, string>>(META_MEMBERS)) ?? {},
+    userId: knownUserId,
+    signedIn: signedInBefore,
   });
+
+  /*
+   * ここで画面を「読み込み中」から解放する。
+   *
+   * 以前はこの後の getSession() を待ってから ready にしていた。
+   * トークンが切れた端末をスーパーの地下で開くと、auth-js が更新のため通信に出て
+   * 失敗し、指数バックオフで数十秒「読み込み中…」が続いたうえ、
+   * session=null で全面ログイン画面に差し替わり、手元にある買い物リストが
+   * 1件も見えなくなっていた。設計の一番大事な場面で真逆の挙動だった。
+   *
+   * 以降は待たない。状態は onAuthStateChange などで遅れて入ってくればよい。
+   */
+  emit({ status: "ready" });
 
   // 別タブでのログインや、後からトークンが復帰した場合にも追随する
   supabase.auth.onAuthStateChange((event, next) => {
     if (event === "SIGNED_OUT") {
       emit({ signedIn: false, userId: null });
+      void local.setMeta(META_SIGNED_IN, false);
     } else if (next?.user && next.user.id !== snapshot.userId) {
-      emit({ signedIn: true, userId: next.user.id });
+      void markSignedIn(next.user.id);
       void loadHousehold().then(() => syncNow()).then(bindRealtime);
     }
   });
 
-  // getSession はローカルの保存済みトークンを読むだけなので、圏外でも通る。
-  const { data } = await supabase.auth.getSession();
-  const session = data.session;
-  if (!session) {
-    emit({ status: "ready", signedIn: false });
+  void resumeSession(supabase);
+}
+
+/** ログインできていることを手元にも残す。圏外での判断材料になる。 */
+async function markSignedIn(userId: string) {
+  emit({ signedIn: true, userId });
+  await local.setMeta(META_SIGNED_IN, true);
+  await local.setMeta(META_USER_ID, userId);
+}
+
+/**
+ * 保存済みトークンの確認。画面を止めずに後追いで行う。
+ *
+ * getSession() は保存済みトークンを読むだけ…ではなく、期限が切れていれば
+ * 更新のため通信に出る。圏外だとここで長く待たされるので、必ず打ち切る。
+ */
+async function resumeSession(supabase: NonNullable<ReturnType<typeof getSupabase>>) {
+  const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+  const result = await Promise.race([
+    supabase.auth.getSession().then((r) => r.data.session),
+    timeout,
+  ]);
+
+  if (result?.user) {
+    await markSignedIn(result.user.id);
+    await loadHousehold();
+    await syncNow();
+    bindRealtime();
     return;
   }
-  emit({ signedIn: true, userId: session.user.id, status: "ready" });
 
-  await loadHousehold();
-  await syncNow();
-  bindRealtime();
+  /*
+   * 確認が取れなかった。ここでログイン画面に落としてはいけない。
+   *
+   * 「確認できなかった」と「ログアウトされた」は別物で、圏外や弱電波では
+   * 前者が普通に起きる。navigator.onLine もリロード後は true に戻るため
+   * 判断材料にならない。手元のリストを見せ続けるほうが、店内では正しい。
+   *
+   * 本当にログインが切れている場合は、同期が 401 で弾かれた時点で分かる
+   * (syncNow の中で判定してログインを促す)。
+   */
+  if (snapshot.signedIn) {
+    await loadHousehold();
+    await syncNow();
+    bindRealtime();
+  }
+}
+
+/** ログインが本当に切れているか。オンラインで認証を拒否されたときだけ真。 */
+function isAuthFailure(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const { code, status, message } = e as {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+  };
+  if (status === 401 || status === 403) return true;
+  // PostgREST は JWT 不正を PGRST301 で返す
+  if (code === "PGRST301") return true;
+  return typeof message === "string" && message.includes("JWT");
 }
 
 async function loadHousehold() {
@@ -202,18 +306,54 @@ async function loadHousehold() {
 export async function syncNow() {
   const supabase = getSupabase();
   if (!supabase || snapshot.mode !== "cloud") return;
-  if (!snapshot.signedIn || !navigator.onLine || snapshot.syncing) return;
+  if (!snapshot.householdId || !navigator.onLine || snapshot.syncing) return;
 
   emit({ syncing: true });
   try {
     await flushOutbox();
     await pull();
+    // discarded はここで消さない。「送れなかったもの」は本人が見て納得するまで残す。
     emit({ error: null, lastSyncedAt: new Date().toISOString() });
   } catch (e) {
-    emit({ error: errorMessage(e) });
+    // ここで初めて「本当に切れている」と分かる。圏外の推測では落とさない。
+    if (isAuthFailure(e)) {
+      emit({ signedIn: false, error: null });
+      void local.setMeta(META_SIGNED_IN, false);
+    } else if (isPermanent(e)) {
+      emit({ error: errorMessage(e) });
+    }
+    // 通信が届かなかっただけなら「エラー」とは言わない。
+    // 圏外は想定内で、伝えるべきは未送信の件数のほう。
   } finally {
     emit({ syncing: false });
   }
+}
+
+export function dismissDiscarded() {
+  emit({ discarded: [] });
+}
+
+/**
+ * 買い物リストを開いている間だけ、定期的に取りに行く。
+ *
+ * 手分けして店内を回っているとき、相手のチェックが届く経路は realtime か
+ * 自分の操作しかなかった。WebSocket が切れると取りこぼしは配られず、
+ * 画面を見続けているので visibilitychange も起きない。
+ * 「電波は立っているのに通らない」場面では online イベントも来ないため、
+ * 何もタップせず歩いている数分間、画面が古いまま=同じ物を2人が買う。
+ */
+export function startPolling(): () => void {
+  let timer: number | null = null;
+  const tick = () => {
+    if (document.visibilityState === "visible") void syncNow();
+    // 送信待ちが残っている間は短い間隔で。送れたら通常間隔に戻す。
+    const interval = snapshot.pending > 0 ? 20_000 : 30_000;
+    timer = window.setTimeout(tick, interval);
+  };
+  timer = window.setTimeout(tick, 30_000);
+  return () => {
+    if (timer !== null) window.clearTimeout(timer);
+  };
 }
 
 /** 未送信の操作を積んだ順に流す。1件でも失敗したらそこで止め、次の機会に再送する。 */
@@ -231,11 +371,15 @@ async function flushOutbox() {
     try {
       await sendOp(op);
     } catch (e) {
-      // Postgres のエラーコードは文字列。中断・通信断(DOMException.code は数値)と区別する。
-      const permanent = typeof (e as { code?: unknown })?.code === "string";
-      if (!permanent) throw e; // 通信断。積んだまま次回に回す
-      // サーバに拒否された操作を先頭に残すと以降が永久に詰まるので捨てる
-      emit({ error: `送信できなかった操作を1件破棄しました: ${errorMessage(e)}` });
+      if (!isPermanent(e)) throw e; // 通信断・中断。積んだまま次回に回す
+      // サーバに拒否された操作を先頭に残すと以降が永久に詰まるので捨てる。
+      // ただし黙って消さない。何を捨てたかは画面に残す。
+      emit({
+        discarded: [
+          ...snapshot.discarded,
+          { label: describeOp(op), message: errorMessage(e) },
+        ],
+      });
     }
     await local.dequeue(op.opId);
     await refreshPending();
@@ -313,10 +457,13 @@ async function sendOp(op: Op) {
     return;
   }
 
+  // 圏外で削除した品を、その間に相手が買っていたら消さない。
+  // 「買った記録」のほうが失って困る(チェック済みが勝つ、と同じ考え方)。
   const { error } = await supabase
     .from(TABLE)
     .delete()
     .eq("id", op.id)
+    .eq("status", "未購入")
     .abortSignal(abortAfterTimeout());
   if (error) throw error;
 }
@@ -354,6 +501,14 @@ async function pull() {
   setItems(next);
 }
 
+/**
+ * 相手の変更を受け取る購読。
+ *
+ * 以前は realtimeBound の旗で1回しか張らなかった。店内で WebSocket が切れると
+ * postgres_changes は取りこぼしを後から配らないので、そこから先の相手の
+ * チェックが永久に届かなくなっていた。切れたら張り直し、張り直した直後に
+ * pull() を1回走らせて、切れていた間の差分を埋める。
+ */
 function bindRealtime() {
   const supabase = getSupabase();
   if (!supabase || realtimeBound) return;
@@ -384,13 +539,29 @@ function bindRealtime() {
         upsertLocalState(row);
       },
     )
-    .subscribe();
+    .subscribe((status) => {
+      if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        realtimeBound = false;
+        // すぐ張り直すと切断中に落ちた更新を取り逃すので、必ず取り直してから
+        window.setTimeout(() => {
+          if (realtimeBound) return;
+          void syncNow().then(() => bindRealtime());
+        }, 3000);
+      }
+    });
 }
 
 // ---------------------------------------------------------------- 画面操作
 
+/**
+ * 送信待ちに積む。
+ *
+ * 条件を signedIn ではなく householdId にしてあるのは、圏外でトークンの
+ * 確認が取れないときでも操作を積むため。以前は signedIn が false になる場面
+ * (まさに店内)で早期 return し、タップが outbox にすら残らなかった。
+ */
 async function queue(op: Op) {
-  if (snapshot.mode !== "cloud" || !snapshot.signedIn) return;
+  if (snapshot.mode !== "cloud" || !snapshot.householdId) return;
   await local.enqueue("items", op);
   await refreshPending();
   void syncNow();
@@ -419,6 +590,28 @@ export type NewItem = {
   reason: string | null;
 };
 
+export type RecentItem = { item: string; qty: string | null; section: string };
+
+/**
+ * よく買うものの候補。
+ *
+ * 買い物リストの行は、在庫へ流し込むときに消える。だから履歴をサーバに残しても
+ * 拾えない。この端末の中に、足した品目だけを覚えておく。
+ * 圏外でも出せるうえ、スキーマも増やさずに済む。
+ */
+export async function loadRecentItems(): Promise<RecentItem[]> {
+  return (await local.getMeta<RecentItem[]>(META_RECENT)) ?? [];
+}
+
+async function rememberItem(input: NewItem) {
+  const previous = await loadRecentItems();
+  const next = [
+    { item: input.item, qty: input.qty, section: input.section },
+    ...previous.filter((r) => r.item !== input.item),
+  ].slice(0, RECENT_LIMIT);
+  await local.setMeta(META_RECENT, next);
+}
+
 export async function addItem(input: NewItem) {
   const householdId = snapshot.householdId ?? LOCAL_HOUSEHOLD_ID;
   const sameSection = snapshot.items.filter((i) => i.section === input.section);
@@ -440,6 +633,7 @@ export async function addItem(input: NewItem) {
 
   await local.saveRows("items", [row]);
   upsertLocalState(row);
+  await rememberItem(input);
   await queue({ kind: "add", tempId: row.id as string, item: row });
 }
 

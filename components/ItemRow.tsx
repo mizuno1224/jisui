@@ -24,6 +24,7 @@ export function ItemRow({ item, checkedByLabel, onToggle, onLongPress }: Props) 
   const checked = item.status === "購入済";
   const timer = useRef<number | null>(null);
   const longPressed = useRef(false);
+  const startPoint = useRef<{ x: number; y: number } | null>(null);
 
   const clear = () => {
     if (timer.current !== null) {
@@ -32,14 +33,25 @@ export function ItemRow({ item, checkedByLabel, onToggle, onLongPress }: Props) 
     }
   };
 
-  const start = () => {
+  const start = (e: React.PointerEvent) => {
     longPressed.current = false;
+    startPoint.current = { x: e.clientX, y: e.clientY };
     clear();
     timer.current = window.setTimeout(() => {
       longPressed.current = true;
       navigator.vibrate?.(20);
       onLongPress(item);
     }, LONG_PRESS_MS);
+  };
+
+  /**
+   * 指が動き始めたら長押し判定をやめる。
+   * これが無いと、ゆっくりスクロールを始めただけで削除シートが開く。
+   */
+  const move = (e: React.PointerEvent) => {
+    const from = startPoint.current;
+    if (!from || timer.current === null) return;
+    if (Math.abs(e.clientX - from.x) > 10 || Math.abs(e.clientY - from.y) > 10) clear();
   };
 
   const handleClick = () => {
@@ -61,6 +73,7 @@ export function ItemRow({ item, checkedByLabel, onToggle, onLongPress }: Props) 
         aria-checked={checked}
         onClick={handleClick}
         onPointerDown={start}
+        onPointerMove={move}
         onPointerUp={clear}
         onPointerLeave={clear}
         onPointerCancel={clear}
@@ -87,7 +100,7 @@ export function ItemRow({ item, checkedByLabel, onToggle, onLongPress }: Props) 
             <span
               className={`text-[17px] font-semibold leading-tight ${
                 checked
-                  ? "text-neutral-400 line-through dark:text-neutral-500"
+                  ? "text-neutral-500 dark:text-neutral-400 line-through dark:text-neutral-500"
                   : "text-neutral-900 dark:text-neutral-50"
               }`}
             >
@@ -96,7 +109,7 @@ export function ItemRow({ item, checkedByLabel, onToggle, onLongPress }: Props) 
             {item.qty && (
               <span
                 className={`text-sm ${
-                  checked ? "text-neutral-400 line-through" : "text-neutral-600 dark:text-neutral-300"
+                  checked ? "text-neutral-500 dark:text-neutral-400 line-through" : "text-neutral-600 dark:text-neutral-300"
                 }`}
               >
                 {item.qty}
@@ -105,14 +118,14 @@ export function ItemRow({ item, checkedByLabel, onToggle, onLongPress }: Props) 
           </span>
           {/* 何のために買うか。代替品を選ぶ判断ができる(設計書 3-2) */}
           {item.reason && !checked && (
-            <span className="mt-0.5 block truncate text-xs text-neutral-500 dark:text-neutral-400">
+            <span className="mt-0.5 block truncate text-xs text-neutral-500 dark:text-neutral-500 dark:text-neutral-400">
               {item.reason}
             </span>
           )}
         </span>
 
         {checked && checkedByLabel && (
-          <span className="shrink-0 text-right text-[11px] leading-tight text-neutral-400">
+          <span className="shrink-0 text-right text-[11px] leading-tight text-neutral-500 dark:text-neutral-400">
             {checkedByLabel}
             <br />
             {checkedTime(item.checked_at)}

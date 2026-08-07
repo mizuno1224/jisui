@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AddItemSheet } from "@/components/AddItemSheet";
 import { MoveToInventorySheet } from "@/components/MoveToInventorySheet";
 import { StatusChips } from "@/components/StatusChips";
 import { ItemRow } from "@/components/ItemRow";
+import { Snackbar } from "@/components/Snackbar";
 import {
   ALL_SECTIONS,
   SALE_SECTION,
@@ -13,7 +14,16 @@ import {
   normalizeSection,
   type SectionName,
 } from "@/lib/sections";
-import { addItem, removeItem, signOut, syncNow, toggle, type NewItem } from "@/lib/store";
+import {
+  addItem,
+  dismissDiscarded,
+  removeItem,
+  signOut,
+  startPolling,
+  syncNow,
+  toggle,
+  type NewItem,
+} from "@/lib/store";
 import type { ShoppingItem } from "@/lib/types";
 import { useShoppingStore } from "@/lib/use-store";
 
@@ -23,7 +33,12 @@ export function ShoppingListScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [actionTarget, setActionTarget] = useState<ShoppingItem | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [undo, setUndo] = useState<{ message: string; run: () => void } | null>(null);
   const headerRef = useRef<HTMLElement>(null);
+
+  // 店内を歩いている間、相手のチェックを取りに行く。
+  // 何もタップしないと同期のきっかけが無く、同じ物を2人が買ってしまう。
+  useEffect(() => startPolling(), []);
 
   const { items, userId, members } = snapshot;
 
@@ -74,7 +89,7 @@ export function ShoppingListScreen() {
 
   if (snapshot.status === "loading") {
     return (
-      <main className="flex min-h-dvh items-center justify-center text-sm text-neutral-400">
+      <main className="flex min-h-dvh items-center justify-center text-sm text-neutral-500 dark:text-neutral-400">
         読み込み中…
       </main>
     );
@@ -110,7 +125,7 @@ export function ShoppingListScreen() {
             <h1 className="text-xs font-medium tracking-wide text-neutral-500">買い物リスト</h1>
             <p className="mt-0.5 text-2xl font-bold leading-tight">
               残り {remaining}
-              <span className="text-base font-medium text-neutral-400"> / {counted.length}</span>
+              <span className="text-base font-medium text-neutral-500 dark:text-neutral-400"> / {counted.length}</span>
             </p>
           </div>
 
@@ -129,12 +144,6 @@ export function ShoppingListScreen() {
             </button>
             {menuOpen && (
               <>
-                <button
-                  type="button"
-                  aria-label="閉じる"
-                  className="fixed inset-0 z-10 cursor-default"
-                  onClick={() => setMenuOpen(false)}
-                />
                 <div className="absolute right-0 z-20 mt-1 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
                   {checkedItems.length > 0 && (
                     <button
@@ -187,7 +196,7 @@ export function ShoppingListScreen() {
       </header>
 
       {items.length === 0 ? (
-        <p className="px-6 py-20 text-center text-sm text-neutral-400">
+        <p className="px-6 py-20 text-center text-sm text-neutral-500 dark:text-neutral-400">
           リストは空です。右下の + で追加できます。
         </p>
       ) : (
@@ -212,6 +221,13 @@ export function ShoppingListScreen() {
                   >
                     {style.icon} {name}
                   </span>
+                  {/* 売り場ごとの残りが分かると、その場を離れてよいか判断できる */}
+                  {!isSale && (
+                    <span className="text-[11px] font-semibold text-neutral-600 dark:text-neutral-300">
+                      残り {sectionItems.filter((i) => i.status === "未購入").length}/
+                      {sectionItems.length}
+                    </span>
+                  )}
                   {isSale && (
                     <span className="text-[11px] text-neutral-500">安ければ買う候補</span>
                   )}
@@ -228,7 +244,16 @@ export function ShoppingListScreen() {
                       key={String(item.id)}
                       item={item}
                       checkedByLabel={labelFor(item)}
-                      onToggle={(i) => void toggle(i.id)}
+                      onToggle={(i) => {
+                        void toggle(i.id);
+                        setUndo({
+                          message:
+                            i.status === "未購入"
+                              ? `${i.item} をチェックしました`
+                              : `${i.item} のチェックを外しました`,
+                          run: () => void toggle(i.id),
+                        });
+                      }}
                       onLongPress={setActionTarget}
                     />
                   ))}
@@ -256,6 +281,39 @@ export function ShoppingListScreen() {
         <MoveToInventorySheet checked={checkedItems} onClose={() => setMoveOpen(false)} />
       )}
 
+      {/* メニューを閉じる面。ヘッダの中に置くと backdrop-blur が
+          fixed の基準になり、ヘッダの高さぶんしか広がらず、
+          画面下をタップしたときに背後の商品行が反応していた */}
+      {menuOpen && (
+        <button
+          type="button"
+          aria-label="メニューを閉じる"
+          className="fixed inset-0 z-20 cursor-default"
+          onClick={() => setMenuOpen(false)}
+        />
+      )}
+
+      {undo && (
+        <Snackbar
+          message={undo.message}
+          onAction={() => {
+            undo.run();
+            setUndo(null);
+          }}
+          onDismiss={() => setUndo(null)}
+        />
+      )}
+
+      {snapshot.discarded.length > 0 && (
+        <Snackbar
+          message={`送れなかった操作が ${snapshot.discarded.length} 件あります`}
+          actionLabel="閉じる"
+          timeoutMs={12000}
+          onAction={dismissDiscarded}
+          onDismiss={() => {}}
+        />
+      )}
+
       {actionTarget && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end">
           <button
@@ -271,8 +329,19 @@ export function ShoppingListScreen() {
             <button
               type="button"
               onClick={() => {
-                void removeItem(actionTarget.id);
+                const removed = actionTarget;
+                void removeItem(removed.id);
                 setActionTarget(null);
+                setUndo({
+                  message: `${removed.item} を削除しました`,
+                  run: () =>
+                    void addItem({
+                      item: removed.item,
+                      qty: removed.qty,
+                      section: removed.section ?? "要確認",
+                      reason: removed.reason,
+                    }),
+                });
               }}
               className="h-14 w-full rounded-xl bg-rose-50 text-base font-bold text-rose-600 dark:bg-rose-950/50"
             >

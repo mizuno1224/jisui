@@ -9,6 +9,7 @@ import { LOCAL_HOUSEHOLD_ID } from "./seed-data";
 import {
   getSnapshot as getSession,
   init as initSession,
+  isPermanent,
   subscribe as subscribeSession,
 } from "./store";
 import { getSupabase } from "./supabase/client";
@@ -23,7 +24,7 @@ import {
 
 const TABLE = "inventory";
 const STORE: local.RowStore = "inventory";
-const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 const abortAfterTimeout = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 export type InventorySnapshot = {
@@ -118,7 +119,7 @@ export async function init() {
 export async function syncNow() {
   const supabase = getSupabase();
   const session = getSession();
-  if (!supabase || !session.signedIn || !navigator.onLine || snapshot.syncing) return;
+  if (!supabase || !session.householdId || !navigator.onLine || snapshot.syncing) return;
 
   emit({ syncing: true });
   try {
@@ -142,8 +143,8 @@ async function flushOutbox() {
     try {
       await sendOp(op);
     } catch (e) {
-      const permanent = typeof (e as { code?: unknown })?.code === "string";
-      if (!permanent) throw e;
+      // 通信失敗・中断は code:"" / status:0 で返るので拒否と区別する
+      if (!isPermanent(e)) throw e;
       emit({ error: `送信できなかった操作を1件破棄しました: ${errorMessage(e)}` });
     }
     await local.dequeue(op.opId);
@@ -275,7 +276,9 @@ function bindRealtime() {
 
 async function queue(op: InvOp) {
   const session = getSession();
-  if (session.mode !== "cloud" || !session.signedIn) return;
+  // signedIn ではなく householdId で見る。圏外でトークンの確認が取れなくても
+  // 冷蔵庫の前での操作は必ず積む(買い物リストと同じ理由)。
+  if (session.mode !== "cloud" || !session.householdId) return;
   await local.enqueue(STORE, op);
   await refreshPending();
   void syncNow();

@@ -14,7 +14,6 @@ export function ChoresScreen() {
   const chores = useTable<Chore>("chores", { orderBy: "sort_order" });
   const [editing, setEditing] = useState<Chore | null>(null);
   const [adding, setAdding] = useState(false);
-  const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const memberLabel = (userId: string | null) => {
@@ -31,7 +30,7 @@ export function ChoresScreen() {
   };
 
   return (
-    <main key={tick} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 px-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
         <Link
           href="/plan"
@@ -70,7 +69,7 @@ export function ChoresScreen() {
               className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left active:bg-neutral-50 dark:active:bg-neutral-800"
             >
               <span className="min-w-0 flex-1">
-                <span className={`block text-[16px] font-semibold ${!c.active ? "text-neutral-400 line-through" : ""}`}>
+                <span className={`block text-[16px] font-semibold ${!c.active ? "text-neutral-500 dark:text-neutral-400 line-through" : ""}`}>
                   {c.name}
                 </span>
                 <span className="mt-0.5 block text-xs text-neutral-500">
@@ -107,7 +106,7 @@ export function ChoresScreen() {
           onSaved={() => {
             setAdding(false);
             setEditing(null);
-            setTick((t) => t + 1);
+            chores.refetch();
           }}
           onError={setError}
         />

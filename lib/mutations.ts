@@ -5,11 +5,11 @@
 // 買い物リストや在庫と違い、これらは家の中で使う機能なので、
 // オフライン用の送信待ち行列は持たせていない。通信できないときは
 // その場で失敗を伝えて、後でやり直してもらうほうが分かりやすい。
-import * as local from "./local-db";
+import { markStale } from "./table-cache";
 import { getSnapshot as getSession } from "./store";
 import { getSupabase } from "./supabase/client";
 
-const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 const signal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 export class OfflineError extends Error {
@@ -21,13 +21,19 @@ export class OfflineError extends Error {
 
 function requireClient() {
   const supabase = getSupabase();
-  if (!supabase || !getSession().signedIn || !navigator.onLine) throw new OfflineError();
+  if (!supabase || !getSession().householdId || !navigator.onLine) throw new OfflineError();
   return supabase;
 }
 
-/** 書き込んだら、その表のキャッシュを捨てて次回に読み直させる。 */
-async function invalidate(table: string) {
-  await local.writeCache(table, []);
+/**
+ * 書き込んだら「古くなった」と印を立てる。
+ *
+ * 以前はここでキャッシュを空配列に置き換えていた。そのため保存直後に
+ * 圏外になると、サーバには入っているのに「予定なし」「記録はありません」と
+ * 出てしまった。キャッシュは消さず、次に読むとき通信を1回強制するだけにする。
+ */
+function invalidate(table: string) {
+  markStale(table);
 }
 
 export async function logCooking(input: {
@@ -52,7 +58,7 @@ export async function logCooking(input: {
     })
     .abortSignal(signal());
   if (error) throw error;
-  await invalidate("cook_log");
+  invalidate("cook_log");
 }
 
 export async function addMealPlan(input: {
@@ -74,7 +80,7 @@ export async function addMealPlan(input: {
     })
     .abortSignal(signal());
   if (error) throw error;
-  await invalidate("meal_plan");
+  invalidate("meal_plan");
 }
 
 export async function setMealStatus(id: number, status: "予定" | "実施" | "中止") {
@@ -85,7 +91,7 @@ export async function setMealStatus(id: number, status: "予定" | "実施" | "�
     .eq("id", id)
     .abortSignal(signal());
   if (error) throw error;
-  await invalidate("meal_plan");
+  invalidate("meal_plan");
 }
 
 export async function deleteMealPlan(id: number) {
@@ -96,7 +102,7 @@ export async function deleteMealPlan(id: number) {
     .eq("id", id)
     .abortSignal(signal());
   if (error) throw error;
-  await invalidate("meal_plan");
+  invalidate("meal_plan");
 }
 
 // ------------------------------------------------------------------ 予定
@@ -127,14 +133,14 @@ export async function saveEvent(input: {
     : supabase.from("events").insert(row);
   const { error } = await query.abortSignal(signal());
   if (error) throw error;
-  await invalidate("events");
+  invalidate("events");
 }
 
 export async function deleteEvent(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("events").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
-  await invalidate("events");
+  invalidate("events");
 }
 
 // ------------------------------------------------------------------ 家事
@@ -163,14 +169,14 @@ export async function saveChore(input: {
     : supabase.from("chores").insert(row);
   const { error } = await query.abortSignal(signal());
   if (error) throw error;
-  await invalidate("chores");
+  invalidate("chores");
 }
 
 export async function deleteChore(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("chores").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
-  await invalidate("chores");
+  invalidate("chores");
 }
 
 /** 家事のチェック。同じ日に二重で入らないよう、外すときは行ごと消す。 */
@@ -197,7 +203,7 @@ export async function toggleChoreDone(choreId: number, date: string, done: boole
       .abortSignal(signal());
     if (error) throw error;
   }
-  await invalidate("chore_log");
+  invalidate("chore_log");
 }
 
 // ---------------------------------------------------------------- 家計簿
@@ -239,14 +245,14 @@ export async function saveTransaction(input: {
     }
     throw error;
   }
-  await invalidate("transactions");
+  invalidate("transactions");
 }
 
 export async function deleteTransaction(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("transactions").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
-  await invalidate("transactions");
+  invalidate("transactions");
 }
 
 export async function saveBudget(category: string, amount: number, yearMonth: string | null) {
@@ -259,14 +265,14 @@ export async function saveBudget(category: string, amount: number, yearMonth: st
     )
     .abortSignal(signal());
   if (error) throw error;
-  await invalidate("budgets");
+  invalidate("budgets");
 }
 
 export async function deleteBudget(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("budgets").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
-  await invalidate("budgets");
+  invalidate("budgets");
 }
 
 // ------------------------------------------------------ 資産・負債・収入
@@ -291,15 +297,15 @@ export async function saveAccount(input: {
     : supabase.from("accounts").insert(row);
   const { error } = await query.abortSignal(signal());
   if (error) throw error;
-  await invalidate("accounts");
+  invalidate("accounts");
 }
 
 export async function deleteAccount(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("accounts").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
-  await invalidate("accounts");
-  await invalidate("balances");
+  invalidate("accounts");
+  invalidate("balances");
 }
 
 export async function saveBalance(accountId: number, yearMonth: string, amount: number) {
@@ -312,7 +318,7 @@ export async function saveBalance(accountId: number, yearMonth: string, amount: 
     )
     .abortSignal(signal());
   if (error) throw error;
-  await invalidate("balances");
+  invalidate("balances");
 }
 
 export async function saveIncome(input: {
@@ -335,12 +341,12 @@ export async function saveIncome(input: {
     : supabase.from("income").insert(row);
   const { error } = await query.abortSignal(signal());
   if (error) throw error;
-  await invalidate("income");
+  invalidate("income");
 }
 
 export async function deleteIncome(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("income").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
-  await invalidate("income");
+  invalidate("income");
 }

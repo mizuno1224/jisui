@@ -33,7 +33,7 @@ export function BudgetMeters({
       </div>
 
       {rows.length === 0 ? (
-        <p className="px-4 text-xs text-neutral-400">
+        <p className="px-4 text-xs text-neutral-500 dark:text-neutral-400">
           まだ設定がありません。「予算を決める」から費目ごとの上限を入れると、
           残りとペースが出ます。
         </p>

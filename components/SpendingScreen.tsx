@@ -28,7 +28,6 @@ export function SpendingScreen() {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [adding, setAdding] = useState(false);
   const [budgetOpen, setBudgetOpen] = useState(false);
-  const [tick, setTick] = useState(0);
 
   const months = useMemo(() => {
     const set = new Set(tx.rows.map((t) => t.date.slice(0, 7)));
@@ -92,7 +91,7 @@ export function SpendingScreen() {
   const max = byCategory[0]?.[1] ?? 1;
 
   return (
-    <main key={tick} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title={`${monthLabel(month)}の支出`}
         subtitle={<>{yen(total)}</>}
@@ -128,7 +127,7 @@ export function SpendingScreen() {
         <div className="rounded-2xl bg-white p-4 dark:bg-neutral-900">
           <p className="text-xs font-medium text-neutral-500">今月の食費</p>
           <p className="mt-1 text-2xl font-bold tabular-nums">{yen(food)}</p>
-          <p className="mt-0.5 text-[11px] text-neutral-400">
+          <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
             {foodBudget
               ? food > foodBudget
                 ? `予算を ${yen(food - foodBudget)} 超過`
@@ -141,7 +140,7 @@ export function SpendingScreen() {
           <p className="mt-1 text-2xl font-bold tabular-nums">
             {perMeal != null ? yen(perMeal) : "—"}
           </p>
-          <p className="mt-0.5 text-[11px] text-neutral-400">
+          <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
             {cookCount > 0 ? `自炊 ${cookCount} 回` : "調理記録がまだありません"}
           </p>
         </div>
@@ -223,12 +222,12 @@ export function SpendingScreen() {
                   onClick={() => setEditing(t)}
                   className="flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left active:bg-neutral-50 dark:active:bg-neutral-800"
                 >
-                  <span className="w-14 shrink-0 text-xs text-neutral-400">
+                  <span className="w-14 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
                     {formatDate(t.date)}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{t.merchant_raw}</span>
-                    <span className="text-[10px] text-neutral-400">
+                    <span className="text-[10px] text-neutral-500 dark:text-neutral-400">
                       {t.category} · {t.source}
                       {t.needs_review && " · 要確認"}
                     </span>
@@ -263,7 +262,7 @@ export function SpendingScreen() {
           onSaved={() => {
             setAdding(false);
             setEditing(null);
-            setTick((t) => t + 1);
+            tx.refetch();
           }}
         />
       )}
@@ -275,7 +274,7 @@ export function SpendingScreen() {
           onClose={() => setBudgetOpen(false)}
           onSaved={() => {
             setBudgetOpen(false);
-            setTick((t) => t + 1);
+            budgets.refetch();
           }}
         />
       )}

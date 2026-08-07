@@ -140,7 +140,7 @@ export function EventSheet({
                 </button>
               ))}
             </div>
-            <p className="mt-1 text-[11px] text-neutral-400">
+            <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
               個人の予定も相手から見えます(予定を突き合わせるため)
             </p>
 

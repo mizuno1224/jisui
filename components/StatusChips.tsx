@@ -22,7 +22,7 @@ export function StatusChips({
   if (snapshot.pending > 0) {
     chips.push({
       key: "pending",
-      label: `未送信 ${snapshot.pending}`,
+      label: `未送信 ${snapshot.pending}(押すと送信)`,
       className: "bg-amber-100 text-amber-900",
       onClick: onSync,
     });
@@ -35,6 +35,13 @@ export function StatusChips({
       key: "local",
       label: "ローカルモード",
       className: "bg-violet-100 text-violet-900",
+    });
+  }
+  if (snapshot.discarded.length > 0) {
+    chips.push({
+      key: "discarded",
+      label: `送れなかった ${snapshot.discarded.length}`,
+      className: "bg-rose-100 text-rose-900",
     });
   }
   if (snapshot.error) {

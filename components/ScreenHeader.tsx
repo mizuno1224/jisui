@@ -41,7 +41,7 @@ export function LoadNotice({
   emptyText: string;
 }) {
   if (loading) {
-    return <p className="px-6 py-20 text-center text-sm text-neutral-400">読み込み中…</p>;
+    return <p className="px-6 py-20 text-center text-sm text-neutral-500 dark:text-neutral-400">読み込み中…</p>;
   }
   if (error) {
     return (
@@ -51,7 +51,7 @@ export function LoadNotice({
     );
   }
   if (empty) {
-    return <p className="px-6 py-20 text-center text-sm text-neutral-400">{emptyText}</p>;
+    return <p className="px-6 py-20 text-center text-sm text-neutral-500 dark:text-neutral-400">{emptyText}</p>;
   }
   return null;
 }

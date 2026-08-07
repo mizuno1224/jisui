@@ -47,7 +47,10 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
    */
   const checked = useMemo(() => {
     return mine.map((ing) => {
-      const inStock = inventory.items.some((inv) => looseMatch(inv.name, ing.name));
+      // 0個の行は「在庫あり」と数えない。切らしているのに買い物リストへ載らなかった
+      const inStock = inventory.items.some(
+        (inv) => (inv.qty ?? 1) > 0 && looseMatch(inv.name, ing.name),
+      );
       if (inStock) return { ing, state: "在庫あり" as Availability };
       const staple = pantry.rows.some(
         (p) => looseMatch(p.name, ing.name) && p.stock !== "切れた",
@@ -60,7 +63,7 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
   const missing = checked.filter((c) => c.state === "足りない" && !c.ing.optional);
 
   if (recipes.loading && !recipe) {
-    return <main className="flex min-h-dvh items-center justify-center text-sm text-neutral-400">読み込み中…</main>;
+    return <main className="flex min-h-dvh items-center justify-center text-sm text-neutral-500 dark:text-neutral-400">読み込み中…</main>;
   }
   if (!recipe) {
     return (
@@ -154,7 +157,7 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
           <Markdown>{recipe.card_md}</Markdown>
         </div>
       ) : (
-        <p className="px-6 py-16 text-center text-sm text-neutral-400">
+        <p className="px-6 py-16 text-center text-sm text-neutral-500 dark:text-neutral-400">
           このレシピにはまだ手順カードがありません。
         </p>
       )}
@@ -180,7 +183,7 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
               : "これを作った(記録する)"}
         </button>
         {cooked === "error" && <p className="mt-2 text-sm text-rose-600">{message}</p>}
-        <p className="mt-2 text-center text-xs text-neutral-400">
+        <p className="mt-2 text-center text-xs text-neutral-500 dark:text-neutral-400">
           記録すると、献立の提案で「最近作ったもの」として避けられます
         </p>
       </div>

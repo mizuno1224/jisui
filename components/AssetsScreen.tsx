@@ -32,7 +32,6 @@ export function AssetsScreen() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [addingAccount, setAddingAccount] = useState(false);
   const [addingIncome, setAddingIncome] = useState(false);
-  const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const balanceOf = (accountId: number): number | null => {
@@ -53,18 +52,18 @@ export function AssetsScreen() {
   );
   const incomeTotal = monthIncome.reduce((s, i) => s + i.amount, 0);
 
-  const run = async (fn: () => Promise<void>) => {
+  const run = async (fn: () => Promise<void>, after?: () => void) => {
     setError(null);
     try {
       await fn();
-      setTick((t) => t + 1);
+      after?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
   return (
-    <main key={tick} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 px-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
         <Link
           href="/spending"
@@ -144,7 +143,7 @@ export function AssetsScreen() {
                   >
                     <span className="block text-[15px] font-semibold">{a.name}</span>
                     {a.category && (
-                      <span className="text-[11px] text-neutral-400">{a.category}</span>
+                      <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{a.category}</span>
                     )}
                   </button>
                   <input
@@ -158,7 +157,7 @@ export function AssetsScreen() {
                       const n = Number(v);
                       if (Number.isNaN(n)) return;
                       if (n === balanceOf(a.id)) return;
-                      void run(() => saveBalance(a.id, month, Math.round(n)));
+                      void run(() => saveBalance(a.id, month, Math.round(n)), balances.refetch);
                     }}
                     className="h-11 w-36 rounded-xl border border-neutral-300 bg-white px-3 text-right text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-800"
                   />
@@ -193,18 +192,18 @@ export function AssetsScreen() {
           </button>
         </div>
         {monthIncome.length === 0 ? (
-          <p className="px-4 text-xs text-neutral-400">この月の収入は未登録です。</p>
+          <p className="px-4 text-xs text-neutral-500 dark:text-neutral-400">この月の収入は未登録です。</p>
         ) : (
           <ul className="divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
             {monthIncome.map((i) => (
               <li key={i.id} className="flex items-center gap-3 px-4 py-3">
-                <span className="w-14 shrink-0 text-xs text-neutral-400">{formatDate(i.date)}</span>
+                <span className="w-14 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">{formatDate(i.date)}</span>
                 <span className="min-w-0 flex-1 truncate text-sm">{i.source}</span>
                 <span className="shrink-0 text-sm font-semibold tabular-nums">{yen(i.amount)}</span>
                 <button
                   type="button"
                   aria-label="削除"
-                  onClick={() => void run(() => deleteIncome(i.id))}
+                  onClick={() => void run(() => deleteIncome(i.id), income.refetch)}
                   className="size-9 shrink-0 rounded-lg bg-neutral-100 text-neutral-400 dark:bg-neutral-800"
                 >
                   ×
@@ -215,7 +214,7 @@ export function AssetsScreen() {
         )}
       </section>
 
-      <p className="mx-4 mt-6 rounded-xl bg-neutral-100 px-4 py-3 text-[11px] leading-relaxed text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+      <p className="mx-4 mt-6 rounded-xl bg-neutral-100 px-4 py-3 text-[11px] leading-relaxed text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500 dark:text-neutral-400">
         この画面の情報は世帯の2人だけが見られます(RLS)。口座番号・カード番号は
         保存できない作りにしてあります。設計書は機密度を理由にこれらを手元に残す方針でしたが、
         アプリで扱う判断に合わせて用意しています。
@@ -231,7 +230,8 @@ export function AssetsScreen() {
           onSaved={() => {
             setAddingAccount(false);
             setEditingAccount(null);
-            setTick((t) => t + 1);
+            accounts.refetch();
+            balances.refetch();
           }}
           onError={setError}
         />
@@ -243,7 +243,7 @@ export function AssetsScreen() {
           onClose={() => setAddingIncome(false)}
           onSaved={() => {
             setAddingIncome(false);
-            setTick((t) => t + 1);
+            income.refetch();
           }}
           onError={setError}
         />
@@ -296,7 +296,7 @@ function AccountSheet({
           placeholder="例: 三井住友銀行 / 住宅ローン / NISA"
           className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
         />
-        <p className="mt-1 text-[11px] text-neutral-400">
+        <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
           口座番号・カード番号は入れないでください(保存する欄を用意していません)
         </p>
 

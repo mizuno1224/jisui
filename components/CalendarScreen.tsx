@@ -29,8 +29,11 @@ export function CalendarScreen() {
   const [weekStart, setWeekStart] = useState(() => startOfWeek(todayISO()));
   const [sheetDate, setSheetDate] = useState<string | null>(null);
   const [editing, setEditing] = useState<CalendarEvent | null>(null);
-  const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // 往復を待たずに丸を付ける。押しても何も起きないと二度押ししてしまい、
+  // chore_log を insert→delete して記録が消えるため。
+  const [choreOverride, setChoreOverride] = useState<Record<string, boolean>>({});
+  const [busyChore, setBusyChore] = useState<string | null>(null);
 
   const plans = useTable<MealPlan>("meal_plan");
   const recipes = useTable<Recipe>("recipes");
@@ -55,10 +58,11 @@ export function CalendarScreen() {
   }, [weekStart, today, plans.rows.length, events.rows.length, chores.rows.length]);
 
   const recipeById = useMemo(() => new Map(recipes.rows.map((r) => [r.id, r])), [recipes.rows]);
-  const doneKeys = useMemo(
-    () => new Set(choreLogs.rows.map((l) => `${l.chore_id}_${l.date}`)),
-    [choreLogs.rows],
-  );
+  const doneBy = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const l of choreLogs.rows) map.set(`${l.chore_id}_${l.date}`, l.done_by);
+    return map;
+  }, [choreLogs.rows]);
 
   const memberLabel = (userId: string | null) => {
     if (!userId) return "2人";
@@ -78,18 +82,39 @@ export function CalendarScreen() {
     });
   };
 
-  const run = async (fn: () => Promise<void>) => {
+  const run = async (fn: () => Promise<void>, after?: () => void) => {
     setError(null);
     try {
       await fn();
-      setTick((t) => t + 1);
+      after?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
+  const toggleChore = async (choreId: number, iso: string, next: boolean) => {
+    const key = `${choreId}_${iso}`;
+    if (busyChore === key) return;
+    setBusyChore(key);
+    setChoreOverride((prev) => ({ ...prev, [key]: next }));
+    try {
+      await toggleChoreDone(choreId, iso, next);
+      choreLogs.refetch();
+    } catch (e) {
+      // 失敗したら見た目を戻す。押したのに残っていない、を防ぐ
+      setChoreOverride((prev) => {
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyChore(null);
+    }
+  };
+
   return (
-    <main key={tick} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title="予定"
         subtitle={<span className="text-xl">{weekRangeLabel(weekStart)}</span>}
@@ -207,7 +232,7 @@ export function CalendarScreen() {
                         {plan.status === "予定" ? (
                           <button
                             type="button"
-                            onClick={() => void run(() => setMealStatus(plan.id, "実施"))}
+                            onClick={() => void run(() => setMealStatus(plan.id, "実施"), plans.refetch)}
                             className="h-9 shrink-0 rounded-lg bg-emerald-50 px-3 text-xs font-bold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
                           >
                             作った
@@ -257,32 +282,38 @@ export function CalendarScreen() {
                   ))}
 
                   {dayChores.map((chore) => {
-                    const done = doneKeys.has(`${chore.id}_${iso}`);
+                    const key = `${chore.id}_${iso}`;
+                    const done = choreOverride[key] ?? doneBy.has(key);
+                    // 誰がやったかは記録した本人の名前を出す。担当より実績が知りたい
+                    const actor = doneBy.get(key);
                     return (
                       <li key={`c${chore.id}`}>
                         <button
                           type="button"
                           role="checkbox"
                           aria-checked={done}
+                          disabled={busyChore === key}
                           onClick={() => {
                             navigator.vibrate?.(8);
-                            void run(() => toggleChoreDone(chore.id, iso, !done));
+                            void toggleChore(chore.id, iso, !done);
                           }}
                           className="flex w-full items-center gap-2 px-3 py-2.5 text-left active:bg-neutral-50 dark:active:bg-neutral-800"
                         >
                           <span className="w-5 shrink-0 text-center">🧹</span>
                           <span
                             className={`min-w-0 flex-1 truncate text-sm ${
-                              done ? "text-neutral-400 line-through" : "font-semibold"
+                              done ? "text-neutral-500 dark:text-neutral-400 line-through" : "font-semibold"
                             }`}
                           >
                             {chore.name}
                           </span>
-                          {chore.assignee_id && (
-                            <span className="shrink-0 text-[10px] text-neutral-400">
-                              {memberLabel(chore.assignee_id)}
-                            </span>
-                          )}
+                          <span className="shrink-0 text-[11px] text-neutral-500 dark:text-neutral-500 dark:text-neutral-400">
+                            {done && actor !== undefined
+                              ? `${memberLabel(actor)}がやった`
+                              : chore.assignee_id
+                                ? memberLabel(chore.assignee_id)
+                                : ""}
+                          </span>
                           <span
                             className={`flex size-6 shrink-0 items-center justify-center rounded-full border-2 ${
                               done ? "border-emerald-600 bg-emerald-600 text-white" : "border-neutral-300 dark:border-neutral-600"
@@ -319,7 +350,8 @@ export function CalendarScreen() {
           onSaved={() => {
             setSheetDate(null);
             setEditing(null);
-            setTick((t) => t + 1);
+            events.refetch();
+            plans.refetch();
           }}
         />
       )}

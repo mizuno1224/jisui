@@ -33,7 +33,7 @@ export function RecipeListScreen() {
         subtitle={
           <>
             {rows.length}
-            <span className="text-base font-medium text-neutral-400"> 品</span>
+            <span className="text-base font-medium text-neutral-500 dark:text-neutral-400"> 品</span>
           </>
         }
       >

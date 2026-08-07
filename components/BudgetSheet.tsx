@@ -101,7 +101,7 @@ export function BudgetSheet({
                 placeholder="—"
                 className="h-11 flex-1 rounded-xl border border-neutral-300 bg-white px-3 text-right text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-800"
               />
-              <span className="shrink-0 text-xs text-neutral-400">円</span>
+              <span className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">円</span>
             </li>
           ))}
         </ul>
