@@ -53,12 +53,18 @@ insert into household_members (household_id, user_id, display_name) values
 
 世帯 id は `seed.sql` が作る固定値。**ここを入れないと RLS で1件も見えない。**
 
-### 2-3. メールログインの設定
+### 2-3. ログイン方式(パスワード)
 
-Authentication → URL Configuration で Redirect URLs に追加する:
+**メールアドレス + パスワード**でログインする。Redirect URLs の登録は不要。
+手順2-2 でユーザーを作るときに決めたパスワードをそのまま使う。
 
-- `http://localhost:3000/auth/callback`
-- `https://<本番のドメイン>/auth/callback`
+設計書ではマジックリンクを想定していたが、2点の理由でパスワードに変えた。
+
+- **iOS のホーム画面アプリは Safari と保管庫が分かれている。** メールのリンクは Safari で開くため、
+  ログイン状態がホーム画面アプリに入らず、いつまでもログインできない
+- **Supabase の標準メールはチームメンバー宛のみ・1時間2通。** 妻のアドレスに届かない
+
+パスワードを忘れたときは Authentication → Users から再設定する。
 
 ### 2-4. 環境変数
 
@@ -118,7 +124,7 @@ DevTools → Application → Service Workers で Offline にチェック → リ
 ## ファイルの見取り図
 
 ```
-app/                 画面(/ = 買い物リスト、/login、/auth/callback)
+app/                 画面(/ = 買い物リスト、/login)
 components/          画面部品
 lib/store.ts         状態と同期の中心。ここを読めば挙動が分かる
 lib/local-db.ts      IndexedDB(items / outbox / meta)

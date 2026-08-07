@@ -1,14 +1,34 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { getSupabase } from "@/lib/supabase/client";
 
+/** Supabase のエラー文をそのまま出しても分からないので、日本語に置き換える。 */
+function readableError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes("invalid login credentials")) {
+    return "メールアドレスかパスワードが違います。";
+  }
+  if (m.includes("email not confirmed")) {
+    return "このユーザーはまだ確認が済んでいません。Supabase の Authentication → Users で確認済みにしてください。";
+  }
+  if (m.includes("rate limit") || m.includes("too many")) {
+    return "試行が多すぎます。少し時間を置いてからもう一度お試しください。";
+  }
+  if (m.includes("failed to fetch") || m.includes("network")) {
+    return "通信できませんでした。電波の良い場所でもう一度お試しください。";
+  }
+  return message;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
   const supabase = getSupabase();
 
   if (!supabase) {
@@ -30,13 +50,17 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      password,
     });
-    setBusy(false);
-    if (error) setError(error.message);
-    else setSent(true);
+    if (error) {
+      setBusy(false);
+      setError(readableError(error.message));
+      return;
+    }
+    // 買い物リストへ。ログイン状態はこの端末に保存されるので、次からは自動で開く。
+    router.replace("/");
   };
 
   return (
@@ -44,39 +68,64 @@ export default function LoginPage() {
       <div className="mx-auto w-full max-w-sm">
         <h1 className="text-2xl font-bold">jisui</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          メールに届くリンクからログインします。パスワードはありません。
+          最初の1回だけログインします。次からはそのまま開きます。
         </p>
 
-        {sent ? (
-          <div className="mt-8 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">
-            <p className="font-semibold">{email} にリンクを送りました。</p>
-            <p className="mt-1">
-              スマホでこのアプリを使う場合は、<b>スマホのメールアプリ</b>からリンクを開いてください。
+        <form onSubmit={submit} className="mt-8">
+          <label htmlFor="email" className="block text-xs font-medium text-neutral-500">
+            メールアドレス
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            inputMode="email"
+            autoCapitalize="none"
+            placeholder="you@example.com"
+            className="mt-1 h-14 w-full rounded-xl border border-neutral-300 bg-white px-4 text-base outline-none focus:border-emerald-500 dark:border-neutral-700 dark:bg-neutral-900"
+          />
+
+          <label
+            htmlFor="password"
+            className="mt-4 block text-xs font-medium text-neutral-500"
+          >
+            パスワード
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            enterKeyHint="go"
+            className="mt-1 h-14 w-full rounded-xl border border-neutral-300 bg-white px-4 text-base outline-none focus:border-emerald-500 dark:border-neutral-700 dark:bg-neutral-900"
+          />
+
+          <button
+            type="submit"
+            disabled={busy || !email.trim() || !password}
+            className="mt-6 h-14 w-full rounded-xl bg-emerald-600 text-base font-bold text-white disabled:opacity-40"
+          >
+            {busy ? "確認中…" : "ログイン"}
+          </button>
+
+          {error && (
+            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/50 dark:text-rose-300">
+              {error}
             </p>
-          </div>
-        ) : (
-          <form onSubmit={submit} className="mt-8">
-            <label className="block text-xs font-medium text-neutral-500">メールアドレス</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-              inputMode="email"
-              placeholder="you@example.com"
-              className="mt-1 h-14 w-full rounded-xl border border-neutral-300 bg-white px-4 text-base outline-none focus:border-emerald-500 dark:border-neutral-700 dark:bg-neutral-900"
-            />
-            <button
-              type="submit"
-              disabled={busy || !email.trim()}
-              className="mt-4 h-14 w-full rounded-xl bg-emerald-600 text-base font-bold text-white disabled:opacity-40"
-            >
-              {busy ? "送信中…" : "ログインリンクを送る"}
-            </button>
-            {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
-          </form>
-        )}
+          )}
+        </form>
+
+        <p className="mt-8 text-xs leading-relaxed text-neutral-400">
+          パスワードを忘れたときは、Supabase の Authentication → Users から
+          対象のユーザーを開き、新しいパスワードを設定してください。
+        </p>
       </div>
     </main>
   );

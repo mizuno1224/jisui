@@ -82,7 +82,7 @@ export function ShoppingListScreen() {
         <div>
           <p className="text-2xl font-bold">買い物リスト</p>
           <p className="mt-2 text-sm text-neutral-500">
-            2人で共有するには、メールでログインしてください。
+            2人で共有するには、最初に1回だけログインしてください。
           </p>
         </div>
         <Link
