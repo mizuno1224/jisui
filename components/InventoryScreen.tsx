@@ -10,9 +10,7 @@ import {
   getSnapshot,
   init,
   removeItem,
-  setExpiry,
-  setLocation,
-  setQty,
+  saveDetails,
   subscribe,
   syncNow,
 } from "@/lib/inventory-store";
@@ -102,8 +100,8 @@ export function InventoryScreen() {
 
   // 検索中は場所のタブを跨いで探す(「あれどこだっけ」に答えるのが目的なので)
   const byLocation = useMemo(() => {
-    const q = query.trim();
-    if (q) return snapshot.items.filter((i) => i.name.includes(q));
+    const q = normalizeText(query.trim());
+    if (q) return snapshot.items.filter((i) => normalizeText(i.name).includes(q));
     return snapshot.items.filter((i) => i.location === tab);
   }, [snapshot.items, tab, query]);
 
@@ -360,9 +358,11 @@ function ItemActionSheet({
           type="button"
           onClick={() => {
             const n = Number(qty);
-            if (!Number.isNaN(n)) void setQty(item.id, n);
-            void setExpiry(item.id, expiry || null);
-            if (location !== item.location) void setLocation(item.id, location);
+            void saveDetails(item.id, {
+              qty: Number.isNaN(n) ? undefined : n,
+              expiry: expiry || null,
+              location,
+            });
             onDone();
           }}
           className="mt-5 h-14 w-full rounded-xl bg-emerald-600 text-base font-bold text-white"

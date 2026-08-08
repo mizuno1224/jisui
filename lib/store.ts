@@ -53,6 +53,8 @@ export type Snapshot = {
   error: string | null;
   /** サーバに拒否されて捨てた操作。error と違い、同期成功では消さない。 */
   discarded: { label: string; message: string }[];
+  /** ログインが切れた。リストは見せたまま、入り直す導線だけ出す。 */
+  authExpired: boolean;
   lastSyncedAt: string | null;
 };
 
@@ -69,6 +71,7 @@ const INITIAL: Snapshot = {
   members: {},
   error: null,
   discarded: [],
+  authExpired: false,
   lastSyncedAt: null,
 };
 
@@ -227,7 +230,7 @@ export async function init() {
 
 /** ログインできていることを手元にも残す。圏外での判断材料になる。 */
 async function markSignedIn(userId: string) {
-  emit({ signedIn: true, userId });
+  emit({ signedIn: true, userId, authExpired: false });
   await local.setMeta(META_SIGNED_IN, true);
   await local.setMeta(META_USER_ID, userId);
 }
@@ -319,7 +322,13 @@ export async function syncNow() {
   } catch (e) {
     // ここで初めて「本当に切れている」と分かる。圏外の推測では落とさない。
     if (isAuthFailure(e)) {
-      emit({ signedIn: false, error: null });
+      /*
+       * ログインが切れた。ただし手元のリストは隠さない。
+       * signedIn を false にすると全面ログイン画面に差し替わり、
+       * 圏外対策で直したはずの「店内でリストが見えない」が再発する。
+       * 送信待ちは積んだままにして、入り直せば流れるようにする。
+       */
+      emit({ authExpired: true, error: null });
       void local.setMeta(META_SIGNED_IN, false);
     } else if (isPermanent(e)) {
       emit({ error: errorMessage(e) });
@@ -373,6 +382,9 @@ async function flushOutbox() {
     try {
       await sendOp(op);
     } catch (e) {
+      // ログインが切れているだけなら、積んだまま待つ。捨てると
+      // 店内でつけたチェックが全部消える。
+      if (isAuthFailure(e)) throw e;
       if (!isPermanent(e)) throw e; // 通信断・中断。積んだまま次回に回す
       // サーバに拒否された操作を先頭に残すと以降が永久に詰まるので捨てる。
       // ただし黙って消さない。何を捨てたかは画面に残す。
@@ -469,14 +481,21 @@ async function sendOp(op: Op) {
     return;
   }
 
-  // 圏外で削除した品を、その間に相手が買っていたら消さない。
-  // 「買った記録」のほうが失って困る(チェック済みが勝つ、と同じ考え方)。
-  const { error } = await supabase
-    .from(TABLE)
-    .delete()
-    .eq("id", op.id)
-    .eq("status", "未購入")
-    .abortSignal(abortAfterTimeout());
+  /*
+   * 削除には2種類ある。
+   *
+   * ・本人が明示的に消したもの(長押し削除・在庫へ移した後の片付け)
+   *   → 状態に関わらず消す。消えないと、次の pull で復活してリストに戻り、
+   *     もう一度「在庫に入れる」と在庫が二重になる。
+   * ・圏外中に消したものが、その間に相手に買われていた場合
+   *   → 「買った記録」のほうが失って困るので消さない。
+   *
+   * 前者に後者の条件を掛けていたため、在庫へ移した品が必ず戻ってきていた。
+   */
+  const query = supabase.from(TABLE).delete().eq("id", op.id);
+  const { error } = await (op.force
+    ? query.abortSignal(abortAfterTimeout())
+    : query.eq("status", "未購入").abortSignal(abortAfterTimeout()));
   if (error) throw error;
 }
 
@@ -521,12 +540,18 @@ async function pull() {
  * チェックが永久に届かなくなっていた。切れたら張り直し、張り直した直後に
  * pull() を1回走らせて、切れていた間の差分を埋める。
  */
+let channel: ReturnType<NonNullable<ReturnType<typeof getSupabase>>["channel"]> | null = null;
+
 function bindRealtime() {
   const supabase = getSupabase();
   if (!supabase || realtimeBound) return;
   realtimeBound = true;
 
-  supabase
+  // 同じ名前で channel() を呼ぶと既存のインスタンスが返り、
+  // 張り直すたびにハンドラが1本ずつ増えていく。必ず捨ててから作る。
+  if (channel) void supabase.removeChannel(channel);
+
+  channel = supabase
     .channel("shopping_list_changes")
     .on(
       "postgres_changes",
@@ -573,7 +598,17 @@ function bindRealtime() {
  * (まさに店内)で早期 return し、タップが outbox にすら残らなかった。
  */
 async function queue(op: Op) {
-  if (snapshot.mode !== "cloud" || !snapshot.householdId) return;
+  if (snapshot.mode !== "cloud") return;
+  if (!snapshot.householdId) {
+    // 世帯の登録が見つからないと保存先が決まらない。
+    // 黙って捨てると「入れたのに相手に出ない」が延々続くので、必ず知らせる。
+    emit({
+      error:
+        "世帯の登録が見つかりません。household_members にこの利用者が登録されているか確認してください。",
+    });
+    void loadHousehold();
+    return;
+  }
   await local.enqueue("items", op);
   await refreshPending();
   void syncNow();
@@ -674,10 +709,11 @@ export async function addItem(input: NewItem) {
   await queue({ kind: "add", tempId: row.id as string, item: row });
 }
 
+/** 本人が消したもの。相手が買っていても消す(force)。 */
 export async function removeItem(id: ItemId) {
   await local.removeRow("items", id);
   setItems(snapshot.items.filter((i) => String(i.id) !== String(id)));
-  await queue({ kind: "delete", id });
+  await queue({ kind: "delete", id, force: true });
 }
 
 export async function signOut() {

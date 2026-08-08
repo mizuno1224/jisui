@@ -117,15 +117,16 @@ export async function markCooked(input: {
   }
 
   // 同じ日に同じものを二重に記録しない(1食あたりの計算が狂うため)
+  // 同じ日に同じものが2行あっても落ちないよう limit(1) で見る
   const { data: already } = await supabase
     .from("cook_log")
     .select("id")
     .eq("date", input.date)
     .eq("name", input.name)
-    .abortSignal(signal())
-    .maybeSingle();
+    .limit(1)
+    .abortSignal(signal());
 
-  if (!already) {
+  if (!already?.length) {
     const { error } = await supabase
       .from("cook_log")
       .insert({

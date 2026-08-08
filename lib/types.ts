@@ -28,7 +28,8 @@ export type Op =
   | { kind: "uncheck"; id: ItemId; at: string }
   | { kind: "add"; tempId: string; item: ShoppingItem }
   | { kind: "upsertQty"; id: ItemId; qty: string | null; at: string }
-  | { kind: "delete"; id: ItemId };
+  /** force: 本人が明示的に消した。相手が買っていても消す */
+  | { kind: "delete"; id: ItemId; force?: boolean };
 
 export type QueuedOp = Op & { opId: number };
 
@@ -56,7 +57,8 @@ export type InventoryItem = {
 export type InvOp =
   | { kind: "upsert"; id: ItemId; patch: Partial<InventoryItem>; at: string }
   | { kind: "add"; tempId: string; item: InventoryItem }
-  | { kind: "delete"; id: ItemId };
+  /** force: 本人が明示的に消した。相手が買っていても消す */
+  | { kind: "delete"; id: ItemId; force?: boolean };
 
 export type QueuedInvOp = InvOp & { opId: number };
 

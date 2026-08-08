@@ -16,6 +16,13 @@ import type { CalendarEvent, EventComment, Recipe } from "@/lib/types";
 
 type Mode = "予定" | "献立";
 
+/** created_at は UTC で返る。そのまま切り出すと9時間ずれる。 */
+function localTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 export function EventSheet({
   date,
   existing,
@@ -34,6 +41,8 @@ export function EventSheet({
   onSaved: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("予定");
+  // 月をめくった先で + を押しても今日に足されていたので、直せるようにする
+  const [when, setWhen] = useState(date);
   const [title, setTitle] = useState(existing?.title ?? "");
   const [startTime, setStartTime] = useState(existing?.start_time?.slice(0, 5) ?? "");
   const [endDate, setEndDate] = useState(existing?.end_date ?? "");
@@ -62,9 +71,17 @@ export function EventSheet({
     try {
       if (mode === "予定") {
         if (!title.trim()) return;
+        if (endDate && endDate < when) {
+          setError("終わりの日は開始日より後にしてください。");
+          return;
+        }
+        if (repeat !== "なし" && repeatUntil && repeatUntil < when) {
+          setError("繰り返しの終了日は開始日より後にしてください。");
+          return;
+        }
         await saveEvent({
           id: existing?.id,
-          date,
+          date: when,
           endDate: endDate || null,
           startTime: startTime || null,
           title: title.trim(),
@@ -77,7 +94,7 @@ export function EventSheet({
       } else {
         const name = chosenRecipe?.name ?? mealName.trim();
         if (!name) return;
-        await addMealPlan({ date, recipeId: chosenRecipe?.id ?? null, name });
+        await addMealPlan({ date: when, recipeId: chosenRecipe?.id ?? null, name });
       }
       onSaved();
     } catch (e) {
@@ -106,9 +123,18 @@ export function EventSheet({
 
   return (
     <Sheet onClose={onClose}>
-      <h2 className="text-base font-bold">
-        {formatDate(date)} {existing ? "の予定" : "に追加"}
-      </h2>
+      <h2 className="text-base font-bold">{existing ? "予定を編集" : "追加"}</h2>
+
+      <label className="mt-3 block text-xs font-medium text-neutral-500">日付</label>
+      <input
+        type="date"
+        value={when}
+        onChange={(e) => setWhen(e.target.value)}
+        className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
+      />
+      <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+        {formatDate(when)}
+      </p>
 
       {!existing && (
         <div className="mt-3 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
@@ -303,7 +329,7 @@ export function EventSheet({
               className="h-14 w-full rounded-xl bg-rose-50 text-base font-bold text-rose-600 disabled:opacity-40 dark:bg-rose-950/50"
             >
               {existing.repeat && existing.repeat !== "なし"
-                ? "この繰り返し予定を削除"
+                ? `繰り返しごと削除(${existing.repeat}の全回)`
                 : "この予定を削除"}
             </button>
           </div>
@@ -370,7 +396,7 @@ function EventComments({
             >
               <div className="max-w-[80%]">
                 <span className="block text-[10px] text-neutral-500 dark:text-neutral-400">
-                  {who(c.user_id)} {c.created_at.slice(11, 16)}
+                  {who(c.user_id)} {localTime(c.created_at)}
                 </span>
                 <div
                   className={`mt-0.5 rounded-2xl px-3 py-2 text-sm ${

@@ -69,9 +69,25 @@ function matchesCycle(repeat: string, start: string, iso: string): boolean {
     const weeks = Math.round(daysBetween(start, iso) / 7);
     return weeks % 2 === 0;
   }
-  if (repeat === "毎月") return s.getDate() === d.getDate();
-  if (repeat === "毎年") return s.getMonth() === d.getMonth() && s.getDate() === d.getDate();
+  /*
+   * 31日や2/29のように、その月に無い日がある。
+   * 素直に日付を比べると2月や30日までの月で丸ごと落ちるので、
+   * その月の最終日に寄せる(月末の支払いは月末に出したい)。
+   */
+  if (repeat === "毎月") {
+    const last = lastDayOfMonth(d.getFullYear(), d.getMonth());
+    return d.getDate() === Math.min(s.getDate(), last);
+  }
+  if (repeat === "毎年") {
+    if (s.getMonth() !== d.getMonth()) return false;
+    const last = lastDayOfMonth(d.getFullYear(), d.getMonth());
+    return d.getDate() === Math.min(s.getDate(), last);
+  }
   return false;
+}
+
+function lastDayOfMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate();
 }
 
 function daysBetween(a: string, b: string): number {

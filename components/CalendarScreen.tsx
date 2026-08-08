@@ -110,7 +110,8 @@ export function CalendarScreen() {
   const goToday = () => {
     setMonth(currentMonth());
     setWeekStart(startOfWeek(today));
-    setSelectedDay(today);
+    // ここで日を選ぶと、月に戻るつもりで押した人の画面を
+    // 88dvh のシートが覆ってしまう。選ぶのはマスのタップだけにする。
   };
 
   return (

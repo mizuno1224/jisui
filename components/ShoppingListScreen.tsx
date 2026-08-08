@@ -95,7 +95,9 @@ export function ShoppingListScreen() {
     );
   }
 
-  if (snapshot.mode === "cloud" && !snapshot.signedIn) {
+  // 一度もログインしていないときだけ、ログインを促す画面にする。
+  // 切れただけの場合は手元のリストを見せたまま、入り直す帯を上に出す。
+  if (snapshot.mode === "cloud" && !snapshot.signedIn && !snapshot.authExpired) {
     return (
       <main className="flex min-h-dvh flex-col items-center justify-center gap-6 px-8 text-center">
         <div>
@@ -193,6 +195,20 @@ export function ShoppingListScreen() {
         </div>
 
         <StatusChips snapshot={snapshot} onSync={() => void syncNow()} />
+
+        {snapshot.authExpired && (
+          <div className="mt-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 dark:bg-amber-950/40">
+            <span className="flex-1 text-xs font-semibold text-amber-900 dark:text-amber-200">
+              ログインが切れました。チェックは手元に残っています。
+            </span>
+            <Link
+              href="/login"
+              className="shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white"
+            >
+              入り直す
+            </Link>
+          </div>
+        )}
       </header>
 
       {items.length === 0 ? (
@@ -304,13 +320,15 @@ export function ShoppingListScreen() {
         />
       )}
 
-      {snapshot.discarded.length > 0 && (
+      {/* 取り消しの帯と同じ位置に出ると「取り消す」を押せなくなる。
+          取り消しが出ている間は待つ。 */}
+      {snapshot.discarded.length > 0 && !undo && (
         <Snackbar
           message={`送れなかった操作が ${snapshot.discarded.length} 件あります`}
           actionLabel="閉じる"
           timeoutMs={12000}
           onAction={dismissDiscarded}
-          onDismiss={() => {}}
+          onDismiss={dismissDiscarded}
         />
       )}
 

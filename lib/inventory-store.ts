@@ -106,9 +106,19 @@ export async function init() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void syncNow();
   });
-  // ログインが後から通った場合にも取りに行く
+  /*
+   * 世帯が確定した(＝ログインが通った)ときだけ取りに行く。
+   *
+   * 以前は store の emit すべてで発火していたため、買い物リストで
+   * 1件チェックするたびに在庫を全件取り直していた。店内で30件つければ30回。
+   */
+  let lastHousehold = getSession().householdId;
   subscribeSession(() => {
-    if (getSession().signedIn) void syncNow();
+    const now = getSession().householdId;
+    if (now && now !== lastHousehold) {
+      lastHousehold = now;
+      void syncNow();
+    }
   });
 
   await syncNow();
@@ -246,12 +256,15 @@ async function pull() {
   setItems(next);
 }
 
+let channel: ReturnType<NonNullable<ReturnType<typeof getSupabase>>["channel"]> | null = null;
+
 function bindRealtime() {
   const supabase = getSupabase();
   if (!supabase || realtimeBound) return;
   realtimeBound = true;
+  if (channel) void supabase.removeChannel(channel);
 
-  supabase
+  channel = supabase
     .channel("inventory_changes")
     .on("postgres_changes", { event: "*", schema: "public", table: TABLE }, async (payload) => {
       const ops = await local.loadOutbox<QueuedInvOp>(STORE);
@@ -269,7 +282,15 @@ function bindRealtime() {
       await local.saveRows(STORE, [row]);
       setItems([...snapshot.items.filter((i) => String(i.id) !== String(row.id)), row]);
     })
-    .subscribe();
+    .subscribe((status) => {
+      // 切れたら張り直す。買い物リスト側だけ直して在庫に残っていた
+      if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        realtimeBound = false;
+        window.setTimeout(() => {
+          if (!realtimeBound) void syncNow();
+        }, 3000);
+      }
+    });
 }
 
 // ---------------------------------------------------------------- 画面操作
@@ -314,6 +335,24 @@ export async function setLocation(id: ItemId, location: Location) {
 
 export async function setExpiry(id: ItemId, expiry: string | null) {
   await patchLocal(id, { expiry });
+}
+
+/**
+ * 詳細シートの「保存」。数量・期限・場所をまとめて1回で書く。
+ *
+ * 以前は3つの関数を続けて呼んでいたが、どれも呼ばれた時点の状態から
+ * 作り直すため、待たずに続けて呼ぶと互いに古い値を書き戻していた
+ * (数量を変えて保存すると、期限の書き込みで数量が元に戻る)。
+ */
+export async function saveDetails(
+  id: ItemId,
+  patch: { qty?: number; expiry?: string | null; location?: Location },
+) {
+  const next: Partial<InventoryItem> = {};
+  if (patch.qty !== undefined) next.qty = Math.max(0, patch.qty);
+  if (patch.expiry !== undefined) next.expiry = patch.expiry;
+  if (patch.location !== undefined) next.location = patch.location;
+  await patchLocal(id, next);
 }
 
 export async function removeItem(id: ItemId) {

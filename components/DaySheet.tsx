@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Sheet } from "@/components/Sheet";
 import { formatDate, relativeDay } from "@/lib/dates";
 import { labelStyle } from "@/lib/event-labels";
-import { markCooked, toggleChoreDone } from "@/lib/mutations";
+import { deleteMealPlan, markCooked, setMealStatus, toggleChoreDone } from "@/lib/mutations";
 import type { CalendarEvent, Chore, MealPlan, Recipe } from "@/lib/types";
 
 /**
@@ -136,10 +136,24 @@ export function DaySheet({
                       作った
                     </button>
                   ) : (
-                    <span className="shrink-0 text-[11px] font-bold text-emerald-600">
-                      {m.status}
-                    </span>
+                    <button
+                      type="button"
+                      disabled={busy === `m${m.id}`}
+                      onClick={() => void run(`m${m.id}`, () => setMealStatus(m.id, "予定"))}
+                      className="h-11 shrink-0 rounded-lg px-2 text-[11px] font-bold text-emerald-600 disabled:opacity-40"
+                    >
+                      {m.status} · 戻す
+                    </button>
                   )}
+                  <button
+                    type="button"
+                    aria-label="この献立を消す"
+                    disabled={busy === `m${m.id}`}
+                    onClick={() => void run(`m${m.id}`, () => deleteMealPlan(m.id))}
+                    className="size-11 shrink-0 rounded-lg text-neutral-400 disabled:opacity-40"
+                  >
+                    ×
+                  </button>
                 </li>
               );
             })}
