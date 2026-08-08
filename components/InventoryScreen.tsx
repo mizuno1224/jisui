@@ -16,7 +16,7 @@ import {
   subscribe,
   syncNow,
 } from "@/lib/inventory-store";
-import { looseMatch } from "@/lib/matching";
+import { looseMatch, normalizeText } from "@/lib/matching";
 import { useTable } from "@/lib/use-table";
 import {
   LOCATIONS,
@@ -57,20 +57,48 @@ export function InventoryScreen() {
   const plans = useTable<MealPlan>("meal_plan");
   const ingredients = useTable<RecipeIngredient>("recipe_ingredients");
 
+  /*
+   * 「使う予定の献立」を先に1回だけ組み立てる。
+   *
+   * 以前は関数を返すだけで結果を持たず、行を描くたびに
+   * 「今後の献立 × 材料全行」を総当たりしていた。+/- を押すと全行が
+   * 描き直されるので、冷蔵庫の前で連打すると反応が目に見えて遅れ、
+   * 押せたか分からずもう一度押して数量が余分に動く原因になっていた。
+   */
   const plannedUses = useMemo(() => {
     const today = todayISO();
-    const upcoming = plans.rows.filter((p) => p.date >= today && p.status !== "中止");
-    return (name: string): string | null => {
-      for (const plan of upcoming) {
-        if (!plan.recipe_id) continue;
-        const used = ingredients.rows.some(
-          (ing) => ing.recipe_id === plan.recipe_id && looseMatch(ing.name, name),
-        );
-        if (used) return `${plan.date.slice(5).replace("-", "/")} ${plan.name ?? ""}`.trim();
+    const upcoming = plans.rows
+      .filter((p) => p.date >= today && p.status !== "中止" && p.recipe_id)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const byRecipe = new Map<number, RecipeIngredient[]>();
+    for (const ing of ingredients.rows) {
+      const list = byRecipe.get(ing.recipe_id);
+      if (list) list.push(ing);
+      else byRecipe.set(ing.recipe_id, [ing]);
+    }
+
+    // 材料名 → 一番近い献立、の対応表。舐めるのは材料行数ぶんで済む。
+    const map = new Map<string, string>();
+    for (const plan of upcoming) {
+      const label = `${plan.date.slice(5).replace("-", "/")} ${plan.name ?? ""}`.trim();
+      for (const ing of byRecipe.get(plan.recipe_id!) ?? []) {
+        const key = normalizeText(ing.name);
+        if (!map.has(key)) map.set(key, label);
       }
-      return null;
-    };
+    }
+    return map;
   }, [plans.rows, ingredients.rows]);
+
+  const plannedUseOf = (name: string): string | null => {
+    const key = normalizeText(name);
+    const exact = plannedUses.get(key);
+    if (exact) return exact;
+    for (const [ingredient, label] of plannedUses) {
+      if (looseMatch(ingredient, key)) return label;
+    }
+    return null;
+  };
 
   // 検索中は場所のタブを跨いで探す(「あれどこだっけ」に答えるのが目的なので)
   const byLocation = useMemo(() => {
@@ -156,7 +184,7 @@ export function InventoryScreen() {
       <ul className="mt-3 divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
         {byLocation.map((item) => {
           const badge = expiryBadge(item.expiry);
-          const use = plannedUses(item.name);
+          const use = plannedUseOf(item.name);
           return (
             <li key={String(item.id)} className="flex min-h-16 items-center gap-2 py-2 pl-4 pr-2">
               <button

@@ -4,25 +4,49 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { LoadNotice, ScreenHeader } from "@/components/ScreenHeader";
 import { useTable } from "@/lib/use-table";
-import type { Recipe } from "@/lib/types";
+import { normalizeText } from "@/lib/matching";
+import type { Recipe, RecipeIngredient } from "@/lib/types";
 
 const CATEGORIES = ["主菜", "副菜", "汁物", "麺・丼", "弁当おかず", "その他"];
 
 export function RecipeListScreen() {
   const { rows, loading, error } = useTable<Recipe>("recipes", { orderBy: "name" });
+  // 冷蔵庫に残った食材から引けるようにする。台所で一番やりたい探し方。
+  const ingredients = useTable<RecipeIngredient>("recipe_ingredients");
+
+  const searchIndex = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const ing of ingredients.rows) {
+      map.set(ing.recipe_id, `${map.get(ing.recipe_id) ?? ""} ${ing.name}`);
+    }
+    return map;
+  }, [ingredients.rows]);
   const [category, setCategory] = useState<string | null>(null);
   const [freezableOnly, setFreezableOnly] = useState(false);
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
-    const q = query.trim();
+    const q = normalizeText(query.trim());
     return rows.filter((r) => {
       if (category && r.category !== category) return false;
       if (freezableOnly && !r.freezable) return false;
-      if (q && !`${r.name} ${r.tags ?? ""} ${r.protein ?? ""}`.includes(q)) return false;
-      return true;
+      if (!q) return true;
+      const haystack = normalizeText(
+        `${r.name} ${r.tags ?? ""} ${r.protein ?? ""} ${searchIndex.get(r.id) ?? ""}`,
+      );
+      return haystack.includes(q);
     });
-  }, [rows, category, freezableOnly, query]);
+  }, [rows, category, freezableOnly, query, searchIndex]);
+
+  /** なぜその料理が出たのか分かるよう、当たった材料を行の下に出す */
+  const matchedIngredient = (recipeId: number): string | null => {
+    const q = normalizeText(query.trim());
+    if (!q) return null;
+    const hit = ingredients.rows.find(
+      (i) => i.recipe_id === recipeId && normalizeText(i.name).includes(q),
+    );
+    return hit?.name ?? null;
+  };
 
   const available = CATEGORIES.filter((c) => rows.some((r) => r.category === c));
 
@@ -40,7 +64,7 @@ export function RecipeListScreen() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="料理名・食材で探す"
+          placeholder="料理名・材料で探す(なす、玉ねぎ…)"
           className="mt-2 h-11 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base outline-none focus:border-emerald-500 dark:border-neutral-700 dark:bg-neutral-800"
         />
         <div className="-mx-4 mt-2 flex gap-1.5 overflow-x-auto px-4 pb-1">
@@ -74,6 +98,11 @@ export function RecipeListScreen() {
             >
               <span className="min-w-0 flex-1">
                 <span className="block text-[17px] font-semibold leading-tight">{r.name}</span>
+                {matchedIngredient(r.id) && (
+                  <span className="mt-0.5 block text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                    材料: {matchedIngredient(r.id)}
+                  </span>
+                )}
                 <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
                   {r.category && <Tag>{r.category}</Tag>}
                   {r.protein && r.protein !== "なし" && <Tag>{r.protein}</Tag>}

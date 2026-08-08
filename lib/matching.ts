@@ -5,11 +5,29 @@
 // どちらかがどちらかを含んでいれば同じものとみなす。
 // 台所での判断材料として出すだけなので、外れても害は小さい。
 
-const normalize = (s: string) =>
-  s
+/**
+ * 表記ゆれを吸収する。「たまねぎ」と「玉ねぎ」、「ポンズ」と「ポン酢」が
+ * 別物になると、在庫からレシピを引くという一番やりたい操作が動かない。
+ * 同じ文字列に何度も正規表現を掛けないよう覚えておく(在庫の +/- で
+ * 毎回全材料を舐めるため、ここが効く)。
+ */
+const cache = new Map<string, string>();
+
+export function normalizeText(input: string): string {
+  const hit = cache.get(input);
+  if (hit !== undefined) return hit;
+  const out = input
     .replace(/[(（][^)）]*[)）]/g, "") // 括弧書きを落とす: キャベツ(カット) → キャベツ
-    .replace(/[\s・]/g, "")
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)) // カタカナ→ひらがな
+    .replace(/[\s・,、]/g, "")
+    .toLowerCase()
     .trim();
+  cache.set(input, out);
+  return out;
+}
+
+const normalize = normalizeText;
 
 /**
  * 材料名から売り場を推測する。当たらなければ「要確認」に落とす。

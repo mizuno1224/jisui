@@ -82,3 +82,17 @@ export function monthLabel(yearMonth: string): string {
   const [y, m] = yearMonth.split("-");
   return `${y}年${Number(m)}月`;
 }
+
+/**
+ * 月表示に並べる日付。日曜始まりで、前後の月にはみ出したぶんも含めて
+ * 6週(42日)ぶんを返す。週数が月ごとに変わると、月を送るたびに
+ * 高さが跳ねて指の位置がずれるため、常に同じ枡数にしてある。
+ */
+export function monthGrid(yearMonth: string): string[] {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const first = `${y}-${pad(m)}-01`;
+  const start = startOfWeek(first);
+  return Array.from({ length: 42 }, (_, i) => addDays(start, i));
+}
+
+export const monthOf = (iso: string) => iso.slice(0, 7);

@@ -9,10 +9,11 @@
 // このファイルの中身が変わると、ブラウザが新しい Service Worker として入れ直し、
 // 古いキャッシュ(activate で削除)ごと画面を作り直す。
 // 上げ忘れると、圏外で起動したときだけ古い画面が出る。
-const VERSION = "v5";
+const VERSION = "v6";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
-const NAV_TIMEOUT_MS = 3000;
+const NAV_TIMEOUT_MS = 1500;
+const DATA_TIMEOUT_MS = 2000;
 
 // タブは5つとも圏外で開けるようにしておく。1つでも欠けると、
 // そのタブだけ「/」(買い物リスト)が出てしまい、壊れたように見える。
@@ -82,6 +83,27 @@ async function networkFirst(request, { timeout } = {}) {
   }
 }
 
+/** キャッシュを即返し、裏で最新に入れ替える。起動の体感がこれで決まる。 */
+async function staleWhileRevalidate(request) {
+  const cached = (await caches.match(request)) || (await caches.match("/"));
+  const fetching = fetch(request)
+    .then(async (response) => {
+      if (response && response.ok) {
+        const cache = await caches.open(RUNTIME_CACHE);
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  if (cached) return cached;
+  const fresh = await Promise.race([
+    fetching,
+    new Promise((resolve) => setTimeout(() => resolve(null), NAV_TIMEOUT_MS)),
+  ]);
+  return fresh || (await fetching) || Response.error();
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -89,10 +111,25 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // Supabase 等はそのまま通す
   if (url.pathname.startsWith("/auth/")) return; // ログインの往復はキャッシュしない
-  if (url.searchParams.has("_rsc")) return; // 部分遷移用のデータは古いものを返さない
+  /*
+   * タブ移動で取りにいく部分描画用のデータ。
+   * 以前は素通ししていたため、「電波はあるのに通らない」場所では
+   * Next 側にも打ち切りが無く、タブを押しても延々何も起きなかった。
+   * 短めに打ち切り、駄目ならキャッシュへ落とす。
+   * 5画面とも中身は client 側で決まるので、多少古くても表示は狂わない。
+   */
+  if (url.searchParams.has("_rsc")) {
+    event.respondWith(networkFirst(request, { timeout: DATA_TIMEOUT_MS }));
+    return;
+  }
 
+  /*
+   * 画面遷移。まずキャッシュを返し、裏で取り直す(stale-while-revalidate)。
+   * ホーム画面から開くのは毎回この経路なので、待たせると毎回
+   * 白い画面から始まることになる。中身は client 側で描き直される。
+   */
   if (request.mode === "navigate") {
-    event.respondWith(networkFirst(request, { timeout: NAV_TIMEOUT_MS }));
+    event.respondWith(staleWhileRevalidate(request));
     return;
   }
 

@@ -11,7 +11,8 @@ import {
   subscribe as subscribeInventory,
 } from "@/lib/inventory-store";
 import { guessSection, looseMatch } from "@/lib/matching";
-import { logCooking } from "@/lib/mutations";
+import { markCooked } from "@/lib/mutations";
+import { useWakeLock } from "@/lib/use-wake-lock";
 import { addItem as addShoppingItem } from "@/lib/store";
 import { useTable } from "@/lib/use-table";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
@@ -30,6 +31,10 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
   useEffect(() => {
     void initInventory();
   }, []);
+
+  // 待ち時間の多い工程を見ている間、画面を消さない。
+  // 濡れた手では解錠できず、読んでいた工程を毎回探し直すことになる。
+  const wakeLock = useWakeLock();
 
   const [added, setAdded] = useState(false);
   const [cooked, setCooked] = useState<"idle" | "saving" | "done" | "error">("idle");
@@ -91,7 +96,9 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
   const recordCooking = async () => {
     setCooked("saving");
     try {
-      await logCooking({ recipeId: recipe.id, name: recipe.name, date: todayISO() });
+      // 献立側の「作った」と同じ処理を通す。
+      // 別々だったせいで家計の「1食あたり」が永久に出なかった。
+      await markCooked({ recipeId: recipe.id, name: recipe.name, date: todayISO() });
       setCooked("done");
     } catch (e) {
       setCooked("error");
@@ -111,7 +118,22 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
           </svg>
           レシピ
         </Link>
-        <h1 className="mt-0.5 text-xl font-bold leading-tight">{recipe.name}</h1>
+        <div className="mt-0.5 flex items-start justify-between gap-2">
+          <h1 className="text-xl font-bold leading-tight">{recipe.name}</h1>
+          {wakeLock.supported && (
+            <button
+              type="button"
+              onClick={wakeLock.toggle}
+              className={`h-9 shrink-0 rounded-lg px-2.5 text-[11px] font-bold ${
+                wakeLock.enabled
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+              }`}
+            >
+              {wakeLock.enabled ? "画面ON" : "画面を消さない"}
+            </button>
+          )}
+        </div>
         <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] text-neutral-600 dark:text-neutral-300">
           {recipe.category && <Chip>{recipe.category}</Chip>}
           {recipe.protein && recipe.protein !== "なし" && <Chip>{recipe.protein}</Chip>}
@@ -125,10 +147,13 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
         <h2 className="text-xs font-bold tracking-wide text-neutral-500">材料と在庫</h2>
         <ul className="mt-2 space-y-1.5">
           {checked.map(({ ing, state }) => (
-            <li key={ing.id} className="flex items-center gap-2 text-sm">
+            <li key={ing.id} className="flex min-h-11 items-center gap-2 text-sm">
               <StateMark state={state} />
-              <span className={state === "足りない" ? "font-semibold" : ""}>{ing.name}</span>
-              <span className="text-xs text-neutral-500">
+              <span className={`flex-1 ${state === "足りない" ? "font-semibold" : ""}`}>
+                {ing.name}
+              </span>
+              {/* 調理台に置いて離れた位置から拾い読みする数字。桁を縦に揃える */}
+              <span className="shrink-0 text-base font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
                 {ing.qty ?? ""}
                 {ing.unit ?? ""}
               </span>

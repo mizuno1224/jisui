@@ -83,6 +83,65 @@ export async function addMealPlan(input: {
   invalidate("meal_plan");
 }
 
+/**
+ * 「作った」を1本にまとめる。
+ *
+ * 予定タブの「作った」は meal_plan の状態だけ、レシピ詳細の「記録する」は
+ * cook_log だけを書いていた。家計の「1食あたり」は cook_log の件数で割るので、
+ * 普段の運用(予定タブで押す)では永久に「—」のままだった。
+ * どちらの入口から押しても両方に残す。
+ */
+export async function markCooked(input: {
+  planId?: number;
+  recipeId: number | null;
+  name: string;
+  date: string;
+}) {
+  const supabase = requireClient();
+
+  if (input.planId) {
+    const { error } = await supabase
+      .from("meal_plan")
+      .update({ status: "実施" })
+      .eq("id", input.planId)
+      .abortSignal(signal());
+    if (error) throw error;
+  } else if (input.recipeId != null) {
+    // レシピ側から押されたときは、同じ日の予定があればそれも実施にする
+    await supabase
+      .from("meal_plan")
+      .update({ status: "実施" })
+      .eq("date", input.date)
+      .eq("recipe_id", input.recipeId)
+      .abortSignal(signal());
+  }
+
+  // 同じ日に同じものを二重に記録しない(1食あたりの計算が狂うため)
+  const { data: already } = await supabase
+    .from("cook_log")
+    .select("id")
+    .eq("date", input.date)
+    .eq("name", input.name)
+    .abortSignal(signal())
+    .maybeSingle();
+
+  if (!already) {
+    const { error } = await supabase
+      .from("cook_log")
+      .insert({
+        household_id: getSession().householdId,
+        date: input.date,
+        recipe_id: input.recipeId,
+        name: input.name,
+      })
+      .abortSignal(signal());
+    if (error) throw error;
+  }
+
+  invalidate("meal_plan");
+  invalidate("cook_log");
+}
+
 export async function setMealStatus(id: number, status: "予定" | "実施" | "中止") {
   const supabase = requireClient();
   const { error } = await supabase
@@ -116,6 +175,9 @@ export async function saveEvent(input: {
   memo?: string | null;
   /** null = 2人の共有予定 */
   ownerId: string | null;
+  label?: string | null;
+  repeat?: string | null;
+  repeatUntil?: string | null;
 }) {
   const supabase = requireClient();
   const row = {
@@ -127,6 +189,9 @@ export async function saveEvent(input: {
     memo: input.memo ?? null,
     owner_id: input.ownerId,
     created_by: getSession().userId,
+    label: input.label ?? null,
+    repeat: input.repeat ?? "なし",
+    repeat_until: input.repeatUntil || null,
   };
   const query = input.id
     ? supabase.from("events").update(row).eq("id", input.id)
@@ -141,6 +206,33 @@ export async function deleteEvent(id: number) {
   const { error } = await supabase.from("events").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
   invalidate("events");
+}
+
+/** 予定ごとのやりとり。「何時に出る?」を予定に紐づけて残す。 */
+export async function addEventComment(eventId: number, body: string) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("event_comments")
+    .insert({
+      household_id: getSession().householdId,
+      event_id: eventId,
+      user_id: getSession().userId,
+      body,
+    })
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("event_comments");
+}
+
+export async function deleteEventComment(id: number) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("event_comments")
+    .delete()
+    .eq("id", id)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("event_comments");
 }
 
 // ------------------------------------------------------------------ 家事

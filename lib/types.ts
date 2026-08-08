@@ -177,6 +177,20 @@ export type CalendarEvent = {
   owner_id: string | null;
   created_by: string | null;
   created_at: string;
+  /** 色分け。lib/event-labels.ts の一覧に対応する */
+  label: string | null;
+  /** なし / 毎週 / 隔週 / 毎月 / 毎年。展開は表示側で行う */
+  repeat: string | null;
+  repeat_until: string | null;
+};
+
+export type EventComment = {
+  id: number;
+  household_id: string;
+  event_id: number;
+  user_id: string | null;
+  body: string;
+  created_at: string;
 };
 
 export type Chore = {
