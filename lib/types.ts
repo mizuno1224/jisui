@@ -27,6 +27,7 @@ export type Op =
   | { kind: "check"; id: ItemId; at: string; by: string | null }
   | { kind: "uncheck"; id: ItemId; at: string }
   | { kind: "add"; tempId: string; item: ShoppingItem }
+  | { kind: "upsertQty"; id: ItemId; qty: string | null; at: string }
   | { kind: "delete"; id: ItemId };
 
 export type QueuedOp = Op & { opId: number };

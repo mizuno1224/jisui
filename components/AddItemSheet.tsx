@@ -3,7 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ALL_SECTIONS, FALLBACK_SECTION } from "@/lib/sections";
 import { guessSection } from "@/lib/matching";
-import { loadRecentItems, type NewItem, type RecentItem } from "@/lib/store";
+import {
+  findDuplicate,
+  loadRecentItems,
+  mergeIntoItem,
+  type NewItem,
+  type RecentItem,
+} from "@/lib/store";
+import type { ShoppingItem } from "@/lib/types";
 
 /**
  * 店で見つけたセール品をその場で足すための入力(設計書 フェーズ2-9)。
@@ -34,16 +41,19 @@ export function AddItemSheet({
     void loadRecentItems().then(setRecent);
   }, []);
 
-  const submit = () => {
+  const duplicate: ShoppingItem | null = name.trim() ? findDuplicate(name.trim()) : null;
+
+  const add = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    onSubmit({
-      item: trimmed,
-      qty: qty.trim() || null,
-      section,
-      reason: null,
-    });
+    onSubmit({ item: trimmed, qty: qty.trim() || null, section, reason: null });
     onClose();
+  };
+
+  const submit = () => {
+    // すでにあるのに気づかず足すと、店で同じ物を2つカゴに入れることになる
+    if (duplicate) return;
+    add();
   };
 
   return (
@@ -108,6 +118,37 @@ export function AddItemSheet({
               />
             </div>
           </div>
+
+          {duplicate && (
+            <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2.5 dark:bg-amber-950/40">
+              <p className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                すでにリストにあります
+              </p>
+              <p className="mt-0.5 text-xs text-amber-900 dark:text-amber-200">
+                {duplicate.item}
+                {duplicate.qty ? ` (${duplicate.qty})` : ""} · {duplicate.section ?? "要確認"}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void mergeIntoItem(duplicate.id, qty.trim() || null);
+                    onClose();
+                  }}
+                  className="h-11 flex-1 rounded-lg bg-amber-500 text-xs font-bold text-white"
+                >
+                  まとめる
+                </button>
+                <button
+                  type="button"
+                  onClick={add}
+                  className="h-11 flex-1 rounded-lg bg-neutral-100 text-xs font-bold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                >
+                  別で足す
+                </button>
+              </div>
+            </div>
+          )}
 
           <label className="mt-3 block text-xs font-medium text-neutral-500">売り場</label>
           {/* select は iOS でホイールが出て2〜3操作かかる。チップなら1タップ */}

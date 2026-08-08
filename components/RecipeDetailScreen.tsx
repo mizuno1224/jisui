@@ -13,7 +13,7 @@ import {
 import { guessSection, looseMatch } from "@/lib/matching";
 import { markCooked } from "@/lib/mutations";
 import { useWakeLock } from "@/lib/use-wake-lock";
-import { addItem as addShoppingItem } from "@/lib/store";
+import { addItem as addShoppingItem, findDuplicate } from "@/lib/store";
 import { useTable } from "@/lib/use-table";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
 
@@ -36,7 +36,7 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
   // 濡れた手では解錠できず、読んでいた工程を毎回探し直すことになる。
   const wakeLock = useWakeLock();
 
-  const [added, setAdded] = useState(false);
+  const [addResult, setAddResult] = useState<string | null>(null);
   const [cooked, setCooked] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -82,15 +82,26 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
   }
 
   const addMissing = async () => {
+    // 相手が別のレシピから同じ材料を足していることがある。
+    // 理由が「◯◯用」で違うので、並べても同じ物と気づけない。ここで弾く。
+    let added = 0;
+    let skipped = 0;
     for (const m of missing) {
+      if (findDuplicate(m.ing.name)) {
+        skipped++;
+        continue;
+      }
       await addShoppingItem({
         item: m.ing.name,
         qty: m.ing.qty ? `${m.ing.qty}${m.ing.unit ?? ""}` : null,
         section: guessSection(m.ing.name),
         reason: `${recipe.name}用`,
       });
+      added++;
     }
-    setAdded(true);
+    setAddResult(
+      skipped > 0 ? `${added}点を追加・${skipped}点はすでにあり` : `${added}点を買い物リストへ`,
+    );
   };
 
   const recordCooking = async () => {
@@ -165,10 +176,10 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
           <button
             type="button"
             onClick={() => void addMissing()}
-            disabled={added}
+            disabled={addResult !== null}
             className="mt-3 h-12 w-full rounded-xl bg-emerald-600 text-sm font-bold text-white disabled:bg-neutral-200 disabled:text-neutral-500 dark:disabled:bg-neutral-800"
           >
-            {added ? "買い物リストに追加しました" : `足りない ${missing.length} 点を買い物リストへ`}
+            {addResult ?? `足りない ${missing.length} 点を買い物リストへ`}
           </button>
         ) : (
           <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-center text-sm font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">

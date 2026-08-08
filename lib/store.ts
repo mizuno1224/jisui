@@ -8,6 +8,7 @@
 //   3. 競合は「チェック済みが勝つ」。二重購入を防ぐことを最優先する。
 import * as local from "./local-db";
 import { LOCAL_HOUSEHOLD_ID, localSeedItems } from "./seed-data";
+import { looseMatch } from "./matching";
 import { sectionRank } from "./sections";
 import { getSupabase, isSupabaseConfigured } from "./supabase/client";
 import {
@@ -146,6 +147,7 @@ function describeOp(op: Op): string {
   if (op.kind === "add") return `${op.item.item} の追加`;
   if (op.kind === "check") return "チェック";
   if (op.kind === "uncheck") return "チェック解除";
+  if (op.kind === "upsertQty") return "数量の変更";
   return "削除";
 }
 
@@ -445,6 +447,16 @@ async function sendOp(op: Op) {
     return;
   }
 
+  if (op.kind === "upsertQty") {
+    const { error } = await supabase
+      .from(TABLE)
+      .update({ qty: op.qty })
+      .eq("id", op.id)
+      .abortSignal(abortAfterTimeout());
+    if (error) throw error;
+    return;
+  }
+
   if (op.kind === "uncheck") {
     // 自分がタップした後に相手がチェックしていたら外さない(チェック済みが勝つ)
     const { error } = await supabase
@@ -591,6 +603,31 @@ export type NewItem = {
 };
 
 export type RecentItem = { item: string; qty: string | null; section: string };
+
+/**
+ * すでにリストにある同じものを探す。
+ *
+ * 夫が「牛乳」を足した後に妻も足すと同じ売り場に2行並び、店では2本カゴに入る。
+ * レシピからの一括追加はもっと起きやすく、別々のレシピで玉ねぎを足すと
+ * 理由が「◯◯用」で違うので、同じ物とすら気づけない。
+ * 買う前に気づけるよう、追加のたびに未購入の同等品を見る。
+ */
+export function findDuplicate(name: string): ShoppingItem | null {
+  return (
+    snapshot.items.find((i) => i.status === "未購入" && looseMatch(i.item, name)) ?? null
+  );
+}
+
+/** 既存の行に数量を足す(「まとめる」を選んだとき)。 */
+export async function mergeIntoItem(id: ItemId, extraQty: string | null) {
+  const item = snapshot.items.find((i) => String(i.id) === String(id));
+  if (!item) return;
+  const qty = [item.qty, extraQty].filter(Boolean).join(" + ") || null;
+  const next = { ...item, qty };
+  await local.saveRows("items", [next]);
+  upsertLocalState(next);
+  await queue({ kind: "upsertQty", id, qty, at: new Date().toISOString() });
+}
 
 /**
  * よく買うものの候補。

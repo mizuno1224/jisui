@@ -27,7 +27,63 @@ export function normalizeText(input: string): string {
   return out;
 }
 
-const normalize = normalizeText;
+/**
+ * 漢字とかなの対応。
+ *
+ * 正規化だけでは「玉ねぎ」と「たまねぎ」が別物のままになる。
+ * 読みを機械的に出すには辞書が要るので、よく使うものだけ手で並べる。
+ * 網羅する必要はない。当たらなければ別の行として足されるだけで、害は小さい。
+ */
+const SYNONYMS: string[][] = [
+  ["玉ねぎ", "たまねぎ", "玉葱", "オニオン"],
+  ["人参", "にんじん"],
+  ["大根", "だいこん"],
+  ["茄子", "なす", "ナスビ"],
+  ["胡瓜", "きゅうり"],
+  ["白菜", "はくさい"],
+  ["法蓮草", "ほうれん草", "ほうれんそう"],
+  ["じゃがいも", "ジャガイモ", "馬鈴薯", "じゃが芋"],
+  ["さつまいも", "薩摩芋", "さつま芋"],
+  ["長ねぎ", "長葱", "ながねぎ", "白ねぎ"],
+  ["にんにく", "大蒜", "ガーリック"],
+  ["生姜", "しょうが", "ショウガ"],
+  ["卵", "たまご", "玉子"],
+  ["豚肉", "ぶたにく"],
+  ["鶏肉", "とりにく", "鳥肉"],
+  ["牛肉", "ぎゅうにく"],
+  ["醤油", "しょうゆ", "しょう油"],
+  ["味噌", "みそ"],
+  ["砂糖", "さとう"],
+  ["酢", "お酢"],
+  ["油", "あぶら"],
+  ["椎茸", "しいたけ"],
+  ["舞茸", "まいたけ"],
+  ["豆腐", "とうふ"],
+  ["牛乳", "ミルク"],
+];
+
+/** 別表記 → 代表表記。突き合わせの前に片側へ寄せる。 */
+const canonicalMap = (() => {
+  const map = new Map<string, string>();
+  for (const group of SYNONYMS) {
+    const head = normalizeText(group[0]);
+    for (const variant of group) map.set(normalizeText(variant), head);
+  }
+  return map;
+})();
+
+function canonical(input: string): string {
+  const base = normalizeText(input);
+  const exact = canonicalMap.get(base);
+  if (exact) return exact;
+  // 「玉ねぎ 1個」のように余分が付いていても寄せる
+  for (const [variant, head] of canonicalMap) {
+    if (variant.length >= 2 && base.includes(variant)) return base.replace(variant, head);
+  }
+  return base;
+}
+
+const normalize = canonical;
 
 /**
  * 材料名から売り場を推測する。当たらなければ「要確認」に落とす。
