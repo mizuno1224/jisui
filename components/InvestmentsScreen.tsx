@@ -28,14 +28,27 @@ export function InvestmentsScreen() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  /** 保有は日付ごとの記録。一番新しい日のものだけを出す。 */
+  /**
+   * いま持っているもの。
+   *
+   * 「一番新しい日の行だけ」にしてはいけない。口座ごとに記録した日が違い
+   * (NISA は 8/03、iDeCo は 8/04 のように)、最新日で切ると
+   * その日に触らなかった口座が丸ごと消える。
+   * 銘柄ごとに、一番新しい記録を採る。
+   */
+  const current = useMemo(() => {
+    const latest = new Map<string, Holding>();
+    for (const h of holdings.rows) {
+      const key = `${h.account}|${h.name}`;
+      const prev = latest.get(key);
+      if (!prev || h.as_of > prev.as_of) latest.set(key, h);
+    }
+    return [...latest.values()];
+  }, [holdings.rows]);
+
   const latestDate = useMemo(
-    () => holdings.rows.reduce((max, h) => (h.as_of > max ? h.as_of : max), ""),
-    [holdings.rows],
-  );
-  const current = useMemo(
-    () => holdings.rows.filter((h) => h.as_of === latestDate),
-    [holdings.rows, latestDate],
+    () => current.reduce((max, h) => (h.as_of > max ? h.as_of : max), ""),
+    [current],
   );
 
   const byAccount = useMemo(() => {
@@ -68,7 +81,7 @@ export function InvestmentsScreen() {
           家計
         </Link>
         <h1 className="mt-0.5 text-xs font-medium tracking-wide text-neutral-500">
-          評価額{latestDate && ` (${formatDate(latestDate)}時点)`}
+          評価額{latestDate && ` (最終更新 ${formatDate(latestDate)})`}
         </h1>
         <p className="text-2xl font-bold tabular-nums">{yen(totalValue)}</p>
         {/* 損益は色だけで示さない。符号と率を必ず文字で出す */}

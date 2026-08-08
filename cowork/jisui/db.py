@@ -260,10 +260,18 @@ class Jisui:
         投資の全体。手元の家計簿アプリから引き継いだ。
         月に1回、証券会社の画面を見ながら更新する使い方を想定している。
         """
-        latest = self.select("holdings", "as_of", order="as_of.desc", limit="1")
-        as_of = latest[0]["as_of"] if latest else None
+        # 口座ごとに記録した日が違う(NISAは8/03、iDeCoは8/04 のように)。
+        # 最新日で切ると、その日に触らなかった口座が丸ごと消えるので、
+        # 全部取ってから銘柄ごとに一番新しいものを残す。
+        rows = self.select("holdings", "*", order="as_of.desc")
+        latest: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            key = (row["account"], row["name"])
+            if key not in latest:
+                latest[key] = row
+        as_of = max((r["as_of"] for r in latest.values()), default=None)
         return {
-            "保有銘柄": self.select("holdings", "*", as_of=f"eq.{as_of}") if as_of else [],
+            "保有銘柄": list(latest.values()),
             "監視銘柄": self.select("watchlist", "*", order="code"),
             "直近の指標": self.select("watch_history", "*", order="as_of.desc", limit="60"),
             "資産の内訳": self.select("asset_details", "*"),
