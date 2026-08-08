@@ -231,3 +231,95 @@ export const EXPENSE_CATEGORIES = [
   "衣類",
   "その他",
 ] as const;
+
+// ------------------------------------------------ 手元の家計簿から吸収
+
+export type AssetDetail = {
+  id: number;
+  household_id: string;
+  /** 親の資産名(accounts.name に対応) */
+  item: string;
+  sub_item: string;
+  amount: number;
+  as_of: string | null;
+  note: string | null;
+};
+
+export type Holding = {
+  id: number;
+  household_id: string;
+  as_of: string;
+  kind: string;
+  account: string;
+  code: string | null;
+  name: string;
+  quantity: number | null;
+  acq_price: number | null;
+  cur_price: number | null;
+  acq_amount: number | null;
+  value: number | null;
+  pnl: number | null;
+  accumulating: boolean;
+};
+
+export type WatchItem = {
+  id: number;
+  household_id: string;
+  code: string;
+  name: string;
+  market: string | null;
+  memo: string | null;
+  added_at: string;
+};
+
+export type WatchHistory = {
+  id: number;
+  household_id: string;
+  code: string;
+  as_of: string;
+  price: number | null;
+  per: number | null;
+  pbr: number | null;
+  div_yield: number | null;
+  dividend: number | null;
+  year_high: number | null;
+  year_low: number | null;
+  note: string | null;
+};
+
+export type LoanSchedule = {
+  id: number;
+  household_id: string;
+  year_month: string;
+  balance: number;
+  /** 実績 / 見込 */
+  kind: string;
+  note: string | null;
+};
+
+export type SalaryRow = {
+  id: number;
+  household_id: string;
+  age: number;
+  grade_no: number | null;
+  monthly_salary: number;
+  bonus_summer: number;
+  bonus_winter: number;
+  retire_rate_self: number | null;
+  retire_rate_teinen: number | null;
+  retire_rate_komu: number | null;
+  note: string | null;
+};
+
+export type Todo = {
+  id: number;
+  household_id: string;
+  title: string;
+  detail: string | null;
+  status: "open" | "done";
+  assignee_id: string | null;
+  due_date: string | null;
+  created_at: string;
+  done_at: string | null;
+  done_by: string | null;
+};

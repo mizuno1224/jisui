@@ -9,7 +9,7 @@
 // このファイルの中身が変わると、ブラウザが新しい Service Worker として入れ直し、
 // 古いキャッシュ(activate で削除)ごと画面を作り直す。
 // 上げ忘れると、圏外で起動したときだけ古い画面が出る。
-const VERSION = "v8";
+const VERSION = "v9";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
@@ -25,6 +25,7 @@ const APP_SHELL = [
   "/plan/chores",
   "/spending",
   "/spending/assets",
+  "/spending/investments",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",

@@ -252,6 +252,53 @@ class Jisui:
             "残高": self.select("balances", "account_id,year_month,amount", year_month=f"eq.{year_month}"),
         }
 
+
+    # ------------------------------------------------ 家計簿(手元から吸収)
+
+    def investments(self) -> dict:
+        """
+        投資の全体。手元の家計簿アプリから引き継いだ。
+        月に1回、証券会社の画面を見ながら更新する使い方を想定している。
+        """
+        latest = self.select("holdings", "as_of", order="as_of.desc", limit="1")
+        as_of = latest[0]["as_of"] if latest else None
+        return {
+            "保有銘柄": self.select("holdings", "*", as_of=f"eq.{as_of}") if as_of else [],
+            "監視銘柄": self.select("watchlist", "*", order="code"),
+            "直近の指標": self.select("watch_history", "*", order="as_of.desc", limit="60"),
+            "資産の内訳": self.select("asset_details", "*"),
+            "時点": as_of,
+        }
+
+    def outlook(self) -> dict:
+        """将来の見通し。ローン残高の予定と俸給表。"""
+        return {
+            "ローン予定": self.select("loan_schedule", "*", order="year_month"),
+            "俸給表": self.select("salary_table", "*", order="age"),
+        }
+
+    def todos(self, include_done: bool = False) -> list[dict]:
+        """やること。家計まわりの宿題。"""
+        filters = {} if include_done else {"status": "eq.open"}
+        return self.select("todos", "*", order="id", **filters)
+
+    def classify(self, merchant: str) -> str | None:
+        """
+        店名から費目を引く。分類辞書(expense_rules)に部分一致させる。
+
+        AI の判断で辞書と違う費目を付けないこと。同じ店がその時々で
+        違う費目になると、月次の比較が意味を失う。
+        辞書に無い店は None を返すので、必ず本人に確認してから追記する。
+        """
+        for rule in self.select("expense_rules", "keyword,category"):
+            if rule["keyword"] and rule["keyword"] in merchant:
+                return rule["category"]
+        return None
+
+    def add_rule(self, keyword: str, category: str, note: str | None = None) -> None:
+        """分類辞書に足す。本人の承認を得てから呼ぶ。"""
+        self.insert("expense_rules", [{"keyword": keyword, "category": category, "note": note}])
+
     @staticmethod
     def dedup_hash(date: str, amount: int, merchant_raw: str) -> str:
         """カード明細との二重計上を照合するための鍵(設計書 5-2)。"""

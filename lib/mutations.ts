@@ -443,3 +443,82 @@ export async function deleteIncome(id: number) {
   if (error) throw error;
   invalidate("income");
 }
+
+// ------------------------------------------------------------ やること
+
+export async function saveTodo(input: {
+  id?: number;
+  title: string;
+  detail?: string | null;
+  dueDate?: string | null;
+  assigneeId?: string | null;
+}) {
+  const supabase = requireClient();
+  const row = {
+    household_id: getSession().householdId,
+    title: input.title,
+    detail: input.detail ?? null,
+    due_date: input.dueDate || null,
+    assignee_id: input.assigneeId ?? null,
+  };
+  const query = input.id
+    ? supabase.from("todos").update(row).eq("id", input.id)
+    : supabase.from("todos").insert(row);
+  const { error } = await query.abortSignal(signal());
+  if (error) throw error;
+  invalidate("todos");
+}
+
+export async function setTodoDone(id: number, done: boolean) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("todos")
+    .update({
+      status: done ? "done" : "open",
+      done_at: done ? new Date().toISOString() : null,
+      done_by: done ? getSession().userId : null,
+    })
+    .eq("id", id)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("todos");
+}
+
+export async function deleteTodo(id: number) {
+  const supabase = requireClient();
+  const { error } = await supabase.from("todos").delete().eq("id", id).abortSignal(signal());
+  if (error) throw error;
+  invalidate("todos");
+}
+
+// -------------------------------------------------------------- 投資
+
+export async function saveWatchItem(input: {
+  id?: number;
+  code: string;
+  name: string;
+  market?: string | null;
+  memo?: string | null;
+}) {
+  const supabase = requireClient();
+  const row = {
+    household_id: getSession().householdId,
+    code: input.code,
+    name: input.name,
+    market: input.market ?? null,
+    memo: input.memo ?? null,
+  };
+  const query = input.id
+    ? supabase.from("watchlist").update(row).eq("id", input.id)
+    : supabase.from("watchlist").insert(row);
+  const { error } = await query.abortSignal(signal());
+  if (error) throw error;
+  invalidate("watchlist");
+}
+
+export async function deleteWatchItem(id: number) {
+  const supabase = requireClient();
+  const { error } = await supabase.from("watchlist").delete().eq("id", id).abortSignal(signal());
+  if (error) throw error;
+  invalidate("watchlist");
+}
