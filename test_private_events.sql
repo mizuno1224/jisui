@@ -198,17 +198,49 @@ begin
 
   execute 'reset role';
 
-  -- ------------------------------ 検査10: タグを消しても秘密が残ること(今回の要)
+  -- ------------------ 検査10: 使っている非公開タグは消せないこと
+  --
+  --   消せても秘密は漏れない(検査11 で確かめる)が、消した本人が
+  --   「色が戻っただけ」と思っているのに、実際にはその予定が
+  --   相手から見えないまま残るという分かりにくい状態になる。
+  --   だからトリガで止めてある。
+  begin
+    delete from calendar_tags where id = v_tag;
+    raise exception E'検査10 失敗: 使用中の非公開タグを消せてしまいました。\n'
+      '  → calendar_tags_block_used_private_delete トリガが付いていません。';
+  exception
+    when raise_exception then
+      -- トリガが投げたのか、上の「失敗」なのかを見分ける。
+      -- 文面に「失敗」とあればこちらが投げたものなので、そのまま上へ流す。
+      if position('検査10 失敗' in sqlerrm) > 0 then
+        raise;
+      end if;
+  end;
+
+  -- ------------------ 検査11: それでもタグが外れたとき、秘密が残ること
+  --
+  --   【ここが今回の設計の要】
   --   外部キーの on delete set null は RLS を通らずに events.tag_id を空にする。
-  --   ここで秘密が解けると、タグを1つ消すだけで全部相手に出る。
-  delete from calendar_tags where id = v_tag;
+  --   今はトリガで削除を止めているが、この先誰かがトリガを外したり、
+  --   持ち主のアカウントが消えて連鎖したりすれば、tag_id は空になる。
+  --   そのときに秘密が解ける実装だと、【普通の操作で全部相手に出る】。
+  --   最初の設計は実際にこうなっていて、それを直すために
+  --   private_owner_id を予定の行に焼き付ける形にした。
+  --
+  --   tag_id を空にするのは、set null が通るのと同じ道すじ。
+  update events set tag_id = null where id = v_event;
 
   select count(*) into v_seen from events
    where id = v_event and private_owner_id = v_a;
   if v_seen <> 1 then
-    raise exception E'検査10 失敗【重大】: タグを消したら秘密も消えました。\n'
+    raise exception E'検査11 失敗【重大】: タグが外れたら秘密も消えました。\n'
       '  → 非公開の判定をタグ側に持たせています。events.private_owner_id に\n'
-      '     焼き付けてください。普通の操作(タグの削除)で全部漏れます。';
+      '     焼き付けてください。タグを消すだけで全部漏れます。';
+  end if;
+
+  select count(*) into v_seen from events where id = v_event and label is not null;
+  if v_seen <> 0 then
+    raise exception E'検査11 失敗: タグを外したときに label へタグ名が入りました。';
   end if;
 
   perform set_config('request.jwt.claims',
@@ -217,11 +249,12 @@ begin
   select count(*) into v_seen from events where id = v_event;
   execute 'reset role';
   if v_seen <> 0 then
-    raise exception E'検査10 失敗【重大】: タグを消したあと、相手から予定が見えています。';
+    raise exception E'検査11 失敗【重大】: タグが外れたあと、相手から予定が見えています。';
   end if;
 
   -- ---------------------------------------------------------- 後始末
   delete from events where id in (v_event, v_shared_event);   -- コメントは cascade で消える
+  delete from calendar_tags where id = v_tag;                 -- 予定が無くなったので消せる
 
   raise notice '----------------------------------------';
   raise notice 'すべて合格。非公開の予定は相手から見えません。';
@@ -234,7 +267,8 @@ begin
   raise notice '  検査7  隠した予定の存在をエラーで探れない';
   raise notice '  検査8  存在しない予定と同じエラーになる';
   raise notice '  検査9  本人には必ず見える';
-  raise notice '  検査10 タグを消しても秘密が残る';
+  raise notice '  検査10 使用中の非公開タグは消せない';
+  raise notice '  検査11 タグが外れても秘密が残る';
   raise notice '----------------------------------------';
 
 exception
@@ -244,9 +278,11 @@ exception
       execute 'reset role';
     exception when others then null;
     end;
-    delete from event_comments where body like '__テスト%' or body = '__のぞき見__';
-    delete from events where title like '__テスト%';
-    delete from calendar_tags where name = '__テスト用の非公開__';
+    -- 【LIKE を使わない】SQL の LIKE では _ が「任意の1文字」の意味になるので、
+    -- '__テスト%' は「任意の2文字 + テスト」に当たる。
+    -- 本物の予定を巻き込んで消しかねないので、作った id だけを指す。
+    delete from events where id in (v_event, v_shared_event);
+    delete from calendar_tags where id = v_tag;
     raise;
 end $$;
 
