@@ -180,11 +180,45 @@ export type CalendarEvent = {
   owner_id: string | null;
   created_by: string | null;
   created_at: string;
-  /** 色分け。lib/event-labels.ts の一覧に対応する */
+  /**
+   * 旧・色分け用の文字列。schema_v5 でタグに移した。
+   * 今は tag_id が正で、これは公開タグ名の写し(非公開タグのときは null)。
+   * タグを消したあとの表示のために残してある。
+   */
   label: string | null;
   /** なし / 毎週 / 隔週 / 毎月 / 毎年。展開は表示側で行う */
   repeat: string | null;
   repeat_until: string | null;
+
+  /** calendar_tags.id。色と、非公開かどうかはここから決まる */
+  tag_id: number | null;
+  location: string | null;
+  url: string | null;
+  /** 持ち物メモ。改行区切りのただの文字列 */
+  items: string | null;
+  /** 通知を何分前に出すか。null = 通知しない */
+  notify_min: number | null;
+  /**
+   * 誰の秘密か。null = 2人とも見える。
+   *
+   * 【アプリからは絶対に書かない】。DB のトリガがタグの設定から決める。
+   * ここに書き込もうとしても上書きされる。読むだけの列。
+   */
+  private_owner_id: string | null;
+};
+
+export type CalendarTag = {
+  id: number;
+  household_id: string;
+  name: string;
+  /** lib/tags.ts の TAG_COLORS のキー。'violet' など */
+  color: string;
+  /** true = このタグを付けた予定は owner_id 本人しか見られない */
+  private: boolean;
+  owner_id: string | null;
+  sort_order: number;
+  active: boolean;
+  created_at: string;
 };
 
 export type EventComment = {
@@ -322,4 +356,11 @@ export type Todo = {
   created_at: string;
   done_at: string | null;
   done_by: string | null;
+
+  /** 親のやること。null = 一番上の階層。入れ子は1段まで */
+  parent_id: number | null;
+  /** なし / 毎日 / 毎週 / 毎月。完了にすると次の期限で作り直す */
+  repeat: string | null;
+  repeat_until: string | null;
+  sort_order: number;
 };

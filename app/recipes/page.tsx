@@ -1,5 +1,10 @@
 import { RecipeListScreen } from "@/components/RecipeListScreen";
+import { RequireSession } from "@/components/RequireSession";
 
 export default function RecipesPage() {
-  return <RecipeListScreen />;
+  return (
+    <RequireSession title="レシピ">
+      <RecipeListScreen />
+    </RequireSession>
+  );
 }

@@ -95,26 +95,7 @@ export function ShoppingListScreen() {
     );
   }
 
-  // 一度もログインしていないときだけ、ログインを促す画面にする。
-  // 切れただけの場合は手元のリストを見せたまま、入り直す帯を上に出す。
-  if (snapshot.mode === "cloud" && !snapshot.signedIn && !snapshot.authExpired) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center gap-6 px-8 text-center">
-        <div>
-          <p className="text-2xl font-bold">買い物リスト</p>
-          <p className="mt-2 text-sm text-neutral-500">
-            2人で共有するには、最初に1回だけログインしてください。
-          </p>
-        </div>
-        <Link
-          href="/login"
-          className="flex h-14 w-full max-w-xs items-center justify-center rounded-xl bg-emerald-600 text-base font-bold text-white"
-        >
-          ログインする
-        </Link>
-      </main>
-    );
-  }
+  // ログインの確認は components/RequireSession.tsx が受け持つ(全タブ共通)。
 
   return (
     <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">

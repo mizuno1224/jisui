@@ -40,7 +40,7 @@ export default function LoginPage() {
           2人で共有するには <code>.env.local</code> を設定してください。
         </p>
         <Link href="/" className="mt-2 text-sm font-semibold text-emerald-700 underline">
-          リストに戻る
+          ホームに戻る
         </Link>
       </main>
     );
@@ -59,7 +59,7 @@ export default function LoginPage() {
       setError(readableError(error.message));
       return;
     }
-    // 買い物リストへ。ログイン状態はこの端末に保存されるので、次からは自動で開く。
+    // ホームへ。ログイン状態はこの端末に保存されるので、次からは自動で開く。
     router.replace("/");
   };
 

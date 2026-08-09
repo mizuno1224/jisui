@@ -225,30 +225,58 @@ export async function remapOutboxId(
 
 // ---------------------------------------------------------------- cache
 
+/**
+ * キャッシュは「誰のものか」で分ける。
+ *
+ * この端末は2人で共有されることがある(家のタブレット、貸し借り)。
+ * キーが表名だけだと、妻がサインアウトしたあと夫が予定を開いたとき、
+ * 妻の行がそのまま描画される。useTable はログイン確認より先に
+ * キャッシュを描くので、ログイン画面を経ずに読めてしまう。
+ *
+ * 消し忘れ(アプリを強制終了された、消す処理が例外で止まった)でも
+ * 漏れないよう、消すことに頼らず【鍵そのものを分ける】。
+ * サインアウト時の全消しと二重で守る。
+ */
+let cacheScope = "anon";
+
+export function setCacheScope(userId: string | null): void {
+  cacheScope = userId ?? "anon";
+}
+
+const scopedKey = (name: string) => `${cacheScope}:${name}`;
+
 /** 読み取り中心のデータ。丸ごと入れ替えるだけなので、配列を1件として置く。 */
 export async function readCache<T>(name: string): Promise<T[] | undefined> {
-  if (useMemory) return memory.cache.get(name) as T[] | undefined;
+  const key = scopedKey(name);
+  if (useMemory) return memory.cache.get(key) as T[] | undefined;
   try {
-    return await tx<T[]>(STORE_CACHE, "readonly", (s) => s.get(name));
+    return await tx<T[]>(STORE_CACHE, "readonly", (s) => s.get(key));
   } catch {
     useMemory = true;
-    return memory.cache.get(name) as T[] | undefined;
+    return memory.cache.get(key) as T[] | undefined;
   }
 }
 
 export async function writeCache<T>(name: string, rows: T[]): Promise<void> {
+  const key = scopedKey(name);
   if (useMemory) {
-    memory.cache.set(name, rows);
+    memory.cache.set(key, rows);
     return;
   }
   try {
-    await tx(STORE_CACHE, "readwrite", (s) => s.put(rows, name));
+    await tx(STORE_CACHE, "readwrite", (s) => s.put(rows, key));
   } catch {
     useMemory = true;
-    memory.cache.set(name, rows);
+    memory.cache.set(key, rows);
   }
 }
 
+/**
+ * キャッシュを全部消す。サインアウトのときに呼ぶ。
+ *
+ * 誰のぶんかを問わず消すのは、この端末を次に使う人が
+ * 前の人のデータに触れないようにするため。
+ */
 export async function clearCache(): Promise<void> {
   if (useMemory) {
     memory.cache.clear();
@@ -259,6 +287,24 @@ export async function clearCache(): Promise<void> {
   } catch {
     useMemory = true;
     memory.cache.clear();
+  }
+}
+
+/**
+ * meta(世帯 id・ユーザ id・名前の対応)を全部消す。サインアウトのときに呼ぶ。
+ *
+ * 残しておくと、次に開いた人の画面に前の人の名前が「自分」として出る。
+ */
+export async function clearMeta(): Promise<void> {
+  if (useMemory) {
+    memory.meta.clear();
+    return;
+  }
+  try {
+    await tx(STORE_META, "readwrite", (s) => s.clear());
+  } catch {
+    useMemory = true;
+    memory.meta.clear();
   }
 }
 

@@ -194,6 +194,12 @@ export async function init() {
   const knownHousehold = (await local.getMeta<string>(META_HOUSEHOLD)) ?? null;
   const signedInBefore = (await local.getMeta<boolean>(META_SIGNED_IN)) ?? false;
   const knownUserId = (await local.getMeta<string>(META_USER_ID)) ?? null;
+
+  // キャッシュは利用者ごとの引き出しに入っている。前回の人を思い出しておかないと、
+  // 起動直後の1回だけ空の引き出しを読んで「圏外だと何も出ない」ことになる。
+  // signedInBefore が false のときは引き出しを開けない(= 前の人のものを読まない)。
+  local.setCacheScope(signedInBefore ? knownUserId : null);
+
   emit({
     householdId: knownHousehold,
     members: (await local.getMeta<Record<string, string>>(META_MEMBERS)) ?? {},
@@ -217,8 +223,13 @@ export async function init() {
   // 別タブでのログインや、後からトークンが復帰した場合にも追随する
   supabase.auth.onAuthStateChange((event, next) => {
     if (event === "SIGNED_OUT") {
-      emit({ signedIn: false, userId: null });
+      // 別のタブでサインアウトされた場合もここに来る。
+      // 手元に残っているものを消すのは signOut() と同じ理由(下を読むこと)。
+      local.setCacheScope(null);
+      emit({ signedIn: false, userId: null, householdId: null, members: {} });
       void local.setMeta(META_SIGNED_IN, false);
+      void local.clearCache();
+      void local.clearMeta();
     } else if (next?.user && next.user.id !== snapshot.userId) {
       void markSignedIn(next.user.id);
       void loadHousehold().then(() => syncNow()).then(bindRealtime);
@@ -230,6 +241,10 @@ export async function init() {
 
 /** ログインできていることを手元にも残す。圏外での判断材料になる。 */
 async function markSignedIn(userId: string) {
+  // キャッシュの持ち主を先に切り替える。これより後のどの読み書きも
+  // この人の引き出しに入る。順番を逆にすると、切り替わる前の1回だけ
+  // 前の人の引き出しを読んでしまう。
+  local.setCacheScope(userId);
   emit({ signedIn: true, userId, authExpired: false });
   await local.setMeta(META_SIGNED_IN, true);
   await local.setMeta(META_USER_ID, userId);
@@ -716,9 +731,31 @@ export async function removeItem(id: ItemId) {
   await queue({ kind: "delete", id, force: true });
 }
 
+/**
+ * サインアウト。
+ *
+ * 【手元に残っているものを全部消すこと】
+ * 以前は買い物リスト(items)だけ消していた。それでは足りない。
+ * useTable は select * で取った行をまるごと IndexedDB の cache に置くので、
+ * そこには予定・コメント・家計まで入っている。予定には「非公開タグを付けた、
+ * 本人しか見られないはずの予定」が含まれる。
+ *
+ * この端末は2人で共有されうる。妻がサインアウトしたあと夫が予定を開くと、
+ * useTable はログイン確認より先にキャッシュを描くので、
+ * 妻の非公開予定がそのまま画面に出る。圏外ならサーバに取り直しに行かないので
+ * 消えずに残り続ける。DB 側で RLS を書いても、この経路には効かない。
+ */
 export async function signOut() {
   const supabase = getSupabase();
   await supabase?.auth.signOut();
   await local.replaceRows("items", []);
-  emit({ items: [], signedIn: false, userId: null, members: {}, householdId: null });
+  await local.replaceRows("inventory", []);
+  await local.clearCache();
+  await local.clearMeta();
+  local.setCacheScope(null);
+  emit({
+    ...INITIAL,
+    status: "ready",
+    online: typeof navigator === "undefined" ? true : navigator.onLine,
+  });
 }

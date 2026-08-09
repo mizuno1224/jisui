@@ -1,5 +1,10 @@
 import { ChoresScreen } from "@/components/ChoresScreen";
+import { RequireSession } from "@/components/RequireSession";
 
 export default function ChoresPage() {
-  return <ChoresScreen />;
+  return (
+    <RequireSession title="家事">
+      <ChoresScreen />
+    </RequireSession>
+  );
 }

@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Sheet } from "@/components/Sheet";
 import { formatDate } from "@/lib/dates";
-import { DEFAULT_LABEL, EVENT_LABELS, REPEATS } from "@/lib/event-labels";
+import { REPEATS } from "@/lib/event-labels";
+import { TAG_COLORS, type TagColor } from "@/lib/tags";
 import {
   addEventComment,
   addMealPlan,
@@ -12,9 +14,18 @@ import {
   saveEvent,
 } from "@/lib/mutations";
 import { useTable } from "@/lib/use-table";
-import type { CalendarEvent, EventComment, Recipe } from "@/lib/types";
+import type { CalendarEvent, CalendarTag, EventComment, Recipe } from "@/lib/types";
 
 type Mode = "予定" | "献立";
+
+/** 通知の選択肢。分で持つ。null = 通知しない。 */
+const NOTIFY_CHOICES: { label: string; min: number | null }[] = [
+  { label: "なし", min: null },
+  { label: "10分前", min: 10 },
+  { label: "30分前", min: 30 },
+  { label: "1時間前", min: 60 },
+  { label: "前日", min: 1440 },
+];
 
 /** created_at は UTC で返る。そのまま切り出すと9時間ずれる。 */
 function localTime(iso: string): string {
@@ -27,6 +38,7 @@ export function EventSheet({
   date,
   existing,
   recipes,
+  tags,
   members,
   userId,
   onClose,
@@ -35,6 +47,7 @@ export function EventSheet({
   date: string;
   existing: CalendarEvent | null;
   recipes: Recipe[];
+  tags: CalendarTag[];
   members: Record<string, string>;
   userId: string | null;
   onClose: () => void;
@@ -48,7 +61,17 @@ export function EventSheet({
   const [endDate, setEndDate] = useState(existing?.end_date ?? "");
   const [memo, setMemo] = useState(existing?.memo ?? "");
   const [ownerId, setOwnerId] = useState<string | null>(existing?.owner_id ?? null);
-  const [label, setLabel] = useState<string>(existing?.label ?? DEFAULT_LABEL);
+  const [tagId, setTagId] = useState<number | null>(existing?.tag_id ?? null);
+  const [endTime, setEndTime] = useState(existing?.end_time?.slice(0, 5) ?? "");
+  const [place, setPlace] = useState(existing?.location ?? "");
+  const [url, setUrl] = useState(existing?.url ?? "");
+  const [items, setItems] = useState(existing?.items ?? "");
+  const [notifyMin, setNotifyMin] = useState<number | null>(existing?.notify_min ?? null);
+  // 場所・持ち物・URL・通知は毎回は使わない。
+  // 既に何か入っているときだけ開いた状態で出す。
+  const [showDetail, setShowDetail] = useState(
+    Boolean(existing?.location || existing?.url || existing?.items || existing?.notify_min),
+  );
   const [repeat, setRepeat] = useState<string>(existing?.repeat ?? "なし");
   const [repeatUntil, setRepeatUntil] = useState(existing?.repeat_until ?? "");
   const [recipeId, setRecipeId] = useState("");
@@ -57,6 +80,8 @@ export function EventSheet({
   const [error, setError] = useState<string | null>(null);
 
   const chosenRecipe = recipes.find((r) => String(r.id) === recipeId);
+  const activeTags = tags.filter((t) => t.active);
+  const chosenTag = activeTags.find((t) => t.id === tagId);
   const partnerId = Object.keys(members).find((id) => id !== userId) ?? null;
 
   const owners: { id: string | null; label: string }[] = [
@@ -84,10 +109,15 @@ export function EventSheet({
           date: when,
           endDate: endDate || null,
           startTime: startTime || null,
+          endTime: endTime || null,
           title: title.trim(),
           memo: memo.trim() || null,
           ownerId,
-          label,
+          tagId,
+          location: place.trim() || null,
+          url: url.trim() || null,
+          items: items.trim() || null,
+          notifyMin,
           repeat,
           repeatUntil: repeat === "なし" ? null : repeatUntil || null,
         });
@@ -166,24 +196,47 @@ export function EventSheet({
             className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
           />
 
-          <label className="mt-3 block text-xs font-medium text-neutral-500">種類</label>
-          <div className="mt-1 grid grid-cols-3 gap-1.5">
-            {EVENT_LABELS.map((l) => (
-              <button
-                key={l.key}
-                type="button"
-                onClick={() => setLabel(l.key)}
-                className={`flex h-11 items-center justify-center gap-1.5 rounded-lg text-xs font-bold ${
-                  label === l.key
-                    ? `${l.chip} ring-2 ring-inset ring-current`
-                    : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
-                }`}
-              >
-                <span className={`size-2.5 rounded-full ${l.bar}`} />
-                {l.key}
-              </button>
-            ))}
+          <div className="mt-3 flex items-baseline justify-between">
+            <label className="text-xs font-medium text-neutral-500">タグ</label>
+            <Link
+              href="/plan/tags"
+              className="text-[11px] text-emerald-700 underline dark:text-emerald-400"
+            >
+              タグを作る・直す
+            </Link>
           </div>
+          <div className="mt-1 grid grid-cols-3 gap-1.5">
+            {activeTags.map((t) => {
+              const style = TAG_COLORS[t.color as TagColor] ?? TAG_COLORS.violet;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTagId(t.id)}
+                  className={`flex h-11 items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold ${
+                    tagId === t.id
+                      ? `${style.chip} ring-2 ring-inset ring-current`
+                      : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                  }`}
+                >
+                  <span className={`size-2.5 shrink-0 rounded-full ${style.bar}`} />
+                  <span className="truncate">{t.name}</span>
+                  {t.private && <span aria-label="非公開">🔒</span>}
+                </button>
+              );
+            })}
+          </div>
+          {chosenTag?.private ? (
+            <p className="mt-1.5 rounded-lg bg-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+              🔒 この予定は<strong>相手からは見えません</strong>。相手の画面には
+              この予定が存在しないので、その時間が空いているように見えます。
+              予定を合わせたいものは共有のタグにしてください。
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+              このタグの予定は2人とも見られます
+            </p>
+          )}
 
           <label className="mt-3 block text-xs font-medium text-neutral-500">誰の予定か</label>
           <div className="mt-1 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
@@ -201,12 +254,13 @@ export function EventSheet({
             ))}
           </div>
           <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-            個人の予定も相手から見えます(予定を突き合わせるため)
+            これは「誰の用事か」の札で、見える範囲とは別です。
+            隠したいときは上のタグで 🔒 のものを選んでください。
           </p>
 
           <div className="mt-3 flex gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-neutral-500">時刻(任意)</label>
+              <label className="block text-xs font-medium text-neutral-500">開始</label>
               <input
                 type="time"
                 value={startTime}
@@ -215,7 +269,16 @@ export function EventSheet({
               />
             </div>
             <div className="flex-1">
-              <label className="block text-xs font-medium text-neutral-500">終わりの日(任意)</label>
+              <label className="block text-xs font-medium text-neutral-500">終了</label>
+              <input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-neutral-500">終わりの日</label>
               <input
                 type="date"
                 value={endDate}
@@ -264,6 +327,75 @@ export function EventSheet({
             enterKeyHint="done"
             className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
           />
+
+          {/*
+            場所・持ち物・URL・通知は「毎回は使わないが、
+            要るときは必ず要る」もの。常に出すと入力欄が9個並んで、
+            ただの予定を1つ足すのが憶劫になる。畳んでおいて、必要な人だけ開く。
+          */}
+          {!showDetail ? (
+            <button
+              type="button"
+              onClick={() => setShowDetail(true)}
+              className="mt-3 h-11 w-full rounded-xl bg-neutral-100 text-sm font-semibold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+            >
+              ＋ 場所・持ち物・URL・通知
+            </button>
+          ) : (
+            <>
+              <label className="mt-3 block text-xs font-medium text-neutral-500">場所</label>
+              <input
+                value={place}
+                onChange={(e) => setPlace(e.target.value)}
+                placeholder="例: 阪急西宮ガーデンズ 3F"
+                className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
+              />
+
+              <label className="mt-3 block text-xs font-medium text-neutral-500">
+                持ち物(1行に1つ)
+              </label>
+              <textarea
+                value={items}
+                onChange={(e) => setItems(e.target.value)}
+                rows={3}
+                placeholder={"保険証\n診察券\nお薬手帳"}
+                className="mt-1 w-full rounded-xl border border-neutral-300 bg-white p-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
+              />
+
+              <label className="mt-3 block text-xs font-medium text-neutral-500">URL</label>
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                type="url"
+                inputMode="url"
+                autoCapitalize="none"
+                placeholder="予約ページ・地図・招待リンク"
+                className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
+              />
+
+              <label className="mt-3 block text-xs font-medium text-neutral-500">通知</label>
+              <div className="mt-1 grid grid-cols-5 gap-1">
+                {NOTIFY_CHOICES.map((n) => (
+                  <button
+                    key={n.label}
+                    type="button"
+                    onClick={() => setNotifyMin(n.min)}
+                    className={`h-11 rounded-lg text-[11px] font-bold ${
+                      notifyMin === n.min
+                        ? "bg-emerald-600 text-white"
+                        : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                    }`}
+                  >
+                    {n.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                通知はこの端末から出ます。iPhone はホーム画面に追加した
+                アプリとして開いているときだけ鳴ります。
+              </p>
+            </>
+          )}
         </>
       ) : (
         <>

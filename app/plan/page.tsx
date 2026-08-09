@@ -1,6 +1,10 @@
 import { CalendarScreen } from "@/components/CalendarScreen";
+import { RequireSession } from "@/components/RequireSession";
 
-// 献立・予定・家事は同じ「いつ」の話なので、1つのカレンダーにまとめている
 export default function PlanPage() {
-  return <CalendarScreen />;
+  return (
+    <RequireSession title="予定">
+      <CalendarScreen />
+    </RequireSession>
+  );
 }

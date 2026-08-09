@@ -9,16 +9,28 @@
 // このファイルの中身が変わると、ブラウザが新しい Service Worker として入れ直し、
 // 古いキャッシュ(activate で削除)ごと画面を作り直す。
 // 上げ忘れると、圏外で起動したときだけ古い画面が出る。
-const VERSION = "v11";
+const VERSION = "v12";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
 const DATA_TIMEOUT_MS = 2000;
 
-// タブは5つとも圏外で開けるようにしておく。1つでも欠けると、
-// そのタブだけ「/」(買い物リスト)が出てしまい、壊れたように見える。
+// タブは6つとも圏外で開けるようにしておく。1つでも欠けると、
+// そのタブだけ「/」(ホーム)が出てしまい、壊れたように見える。
+// 買い物リストは "/" ではなく "/shopping"。ここを入れ忘れると、
+// 圏外で買い物タブを押したとき URL は /shopping のままホームが描画される。
+// スーパーの店内という、このアプリの一番大事な場面で起きる事故。
+//
+// 【addAll は全部そろって初めて成功する】。ここに書いたページを
+// まだデプロイしていない状態でこの sw.js を配ると install ごと失敗し、
+// 新しい Service Worker が二度と入らなくなる(自分では直らない)。
+// ページの追加と sw.js の更新は必ず同じデプロイに乗せること。
 const APP_SHELL = [
   "/",
+  "/shopping",
+  "/login",
+  "/plan/todos",
+  "/plan/tags",
   "/inventory",
   "/recipes",
   "/plan",

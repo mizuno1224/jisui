@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useState } from "react";
 import { Sheet } from "@/components/Sheet";
 import { formatDate, relativeDay } from "@/lib/dates";
-import { labelStyle } from "@/lib/event-labels";
+import { tagName, tagStyle } from "@/lib/tags";
 import { deleteMealPlan, markCooked, setMealStatus, toggleChoreDone } from "@/lib/mutations";
-import type { CalendarEvent, Chore, MealPlan, Recipe } from "@/lib/types";
+import type { CalendarEvent, CalendarTag, Chore, MealPlan, Recipe } from "@/lib/types";
 
 /**
  * その日の中身をまとめて見るシート。
@@ -21,6 +21,7 @@ export function DaySheet({
   chores,
   doneKeys,
   recipeById,
+  tagById,
   memberLabel,
   onClose,
   onAdd,
@@ -33,6 +34,7 @@ export function DaySheet({
   chores: Chore[];
   doneKeys: Set<string>;
   recipeById: Map<number, Recipe>;
+  tagById: Map<number, CalendarTag>;
   memberLabel: (id: string | null) => string;
   onClose: () => void;
   onAdd: () => void;
@@ -166,28 +168,63 @@ export function DaySheet({
           <h3 className="text-xs font-bold text-neutral-500">予定</h3>
           <ul className="mt-1 divide-y divide-neutral-100 dark:divide-neutral-800">
             {events.map((e) => {
-              const style = labelStyle(e.label);
+              const tag = e.tag_id == null ? undefined : tagById.get(e.tag_id);
+              const style = tagStyle(tag, e.label);
+              // 持ち物は改行区切りのただの文字列。空行は落とす。
+              const carry = (e.items ?? "").split("\n").map((v) => v.trim()).filter(Boolean);
               return (
-                <li key={e.id}>
+                <li key={e.id} className="py-1">
                   <button
                     type="button"
                     onClick={() => onEditEvent(e)}
-                    className="flex w-full items-center gap-2 py-2.5 text-left"
+                    className="flex w-full items-center gap-2 py-1.5 text-left"
                   >
                     <span className={`h-8 w-1 shrink-0 rounded-full ${style.bar}`} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold">{e.title}</span>
                       <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                        {e.start_time ? `${e.start_time.slice(0, 5)} · ` : ""}
-                        {memberLabel(e.owner_id)}
+                        {e.start_time ? `${e.start_time.slice(0, 5)}` : "終日"}
+                        {e.end_time ? `–${e.end_time.slice(0, 5)}` : ""}
+                        {` · ${memberLabel(e.owner_id)}`}
                         {e.repeat && e.repeat !== "なし" ? ` · ${e.repeat}` : ""}
                         {e.memo ? ` · ${e.memo}` : ""}
                       </span>
                     </span>
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${style.chip}`}>
-                      {e.label ?? "予定"}
+                    <span
+                      className={`flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold ${style.chip}`}
+                    >
+                      {tag?.private && <span aria-label="非公開">🔒</span>}
+                      {tagName(tag, e.label)}
                     </span>
                   </button>
+
+                  {/* 場所・持ち物・URL は「出かける直前に見るもの」。
+                      タップして編集画面を開かなくても読めるように出しておく。 */}
+                  {(e.location || carry.length > 0 || e.url) && (
+                    <div className="ml-3 space-y-1 pb-1.5 pl-2">
+                      {e.location && (
+                        <p className="text-[11px] text-neutral-600 dark:text-neutral-300">
+                          📍 {e.location}
+                        </p>
+                      )}
+                      {carry.length > 0 && (
+                        <p className="text-[11px] text-neutral-600 dark:text-neutral-300">
+                          👜 {carry.join("、")}
+                        </p>
+                      )}
+                      {e.url && (
+                        <a
+                          href={e.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(ev) => ev.stopPropagation()}
+                          className="block truncate text-[11px] text-emerald-700 underline dark:text-emerald-400"
+                        >
+                          🔗 {e.url}
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </li>
               );
             })}

@@ -55,6 +55,15 @@ export function useTable<T extends Identified>(
 
   const lastFetchedAt = useRef(0);
   const cancelled = useRef(false);
+  /**
+   * 何回目の取得かを数える札。
+   *
+   * 応答は最大8秒飛んでいる。その間に利用者が入れ替わることがある
+   * (この端末は2人で共有されうる)。飛んでいる応答は【前の人の権限で】
+   * 出したものなので、着地した頃には見てはいけない行が入っている。
+   * 出したときの札と今の札が違えば、その応答は捨てる。
+   */
+  const generation = useRef(0);
 
   const fetchFresh = useCallback(
     async (force = false) => {
@@ -65,6 +74,9 @@ export function useTable<T extends Identified>(
       }
       if (!force && Date.now() - lastFetchedAt.current < FRESH_FOR_MS) return;
 
+      const myTurn = ++generation.current;
+      const userAtStart = getSession().userId;
+
       let query = supabase
         .from(table)
         .select(select)
@@ -72,7 +84,10 @@ export function useTable<T extends Identified>(
       if (orderBy) query = query.order(orderBy, { ascending });
 
       const { data, error } = await query;
-      if (cancelled.current) return;
+      // 誰の権限で出した応答か確かめてから使う。
+      // ここを飛ばすと、前の人のデータをキャッシュに書き戻してしまい後を引く。
+      if (cancelled.current || myTurn !== generation.current) return;
+      if (getSession().userId !== userAtStart) return;
       if (error) {
         // 取れなくても、出しているキャッシュは消さない
         setState((s) => ({ ...s, loading: false, error: error.message }));
@@ -81,7 +96,7 @@ export function useTable<T extends Identified>(
       const rows = (data ?? []) as unknown as T[];
       lastFetchedAt.current = Date.now();
       await local.writeCache(table, rows);
-      if (cancelled.current) return;
+      if (cancelled.current || myTurn !== generation.current) return;
       setState({ rows, loading: false, error: null, stale: false });
     },
     [table, select, orderBy, ascending],
@@ -111,11 +126,29 @@ export function useTable<T extends Identified>(
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", onOnline);
 
-    let wasSignedIn = getSession().signedIn;
+    // 「ログインした瞬間」だけを見ていると、人が入れ替わったときに
+    // 前の人のキャッシュを出したまま止まる。利用者そのものの変化を契機にする。
+    let lastUser = getSession().userId;
     const unsubscribeSession = subscribeSession(() => {
-      const nowSignedIn = getSession().signedIn;
-      if (nowSignedIn && !wasSignedIn) void fetchFresh(true);
-      wasSignedIn = nowSignedIn;
+      const nowUser = getSession().userId;
+      if (nowUser === lastUser) return;
+      lastUser = nowUser;
+      if (nowUser === null) {
+        // サインアウト。手元に出ているものを消す。store 側でキャッシュも消える。
+        generation.current += 1;
+        lastFetchedAt.current = 0;
+        setState({ rows: [], loading: false, error: null, stale: true });
+        return;
+      }
+      // 別の人が入った。前の人の引き出しではなく、この人の引き出しを読み直す。
+      lastFetchedAt.current = 0;
+      void (async () => {
+        const cached = await local.readCache<T>(table);
+        if (!cancelled.current) {
+          setState({ rows: cached ?? [], loading: false, error: null, stale: true });
+        }
+        await fetchFresh(true);
+      })();
     });
 
     // 書き込み側が「古くなった」と言ってきたら、間隔を無視して取り直す

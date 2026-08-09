@@ -82,7 +82,7 @@ export function AssetsScreen() {
   const addTodo = async () => {
     const title = newTodo.trim();
     if (!title) return;
-    await run(() => saveTodo({ title }), () => {
+    await run(async () => void (await saveTodo({ title })), () => {
       setNewTodo("");
       todos.refetch();
     });
@@ -380,7 +380,7 @@ export function AssetsScreen() {
                   type="button"
                   role="checkbox"
                   aria-checked={false}
-                  onClick={() => void run(() => setTodoDone(t.id, true), todos.refetch)}
+                  onClick={() => void run(() => setTodoDone(t, true), todos.refetch)}
                   className="flex min-h-16 w-full items-start gap-3 px-4 py-3 text-left"
                 >
                   <span className="mt-0.5 flex size-6 shrink-0 rounded-full border-2 border-neutral-300 dark:border-neutral-600" />
