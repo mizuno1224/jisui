@@ -390,9 +390,10 @@ export function EventSheet({
                   </button>
                 ))}
               </div>
-              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                通知はこの端末から出ます。iPhone はホーム画面に追加した
-                アプリとして開いているときだけ鳴ります。
+              <p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+                <strong>いまは記録するだけで、まだ鳴りません。</strong>
+                ホーム画面の「今日の予定」に出るので、そこで気づく形です。
+                絶対に忘れたくない用事は、端末のアラームも併せて使ってください。
               </p>
             </>
           )}

@@ -1,28 +1,13 @@
-/**
- * 予定のラベル。
+/*
+ * 【ラベルの一覧はここから消えた】
  *
- * 一覧はアプリ側に固定で持つ。2人で使ううちは分類が増えないので、
- * テーブルを足して管理画面を作るより、決め打ちのほうが早くて壊れない。
+ * 予定の色分けは calendar_tags テーブル(schema_v5.sql)に移した。
+ * 「非公開かどうか」を人ごとに持たせる必要が出たため、
+ * アプリに固定で書いておく方式では足りなくなった。
  *
- * 色だけで区別させない。月表示では帯の色に加えて必ず文字を出し、
- * 詳細ではラベル名そのものを表示する。
+ * 色の対応表は lib/tags.ts。表示は tagStyle() / tagName() を使う。
+ * このファイルに残っているのは、繰り返しの展開だけ。
  */
-export const EVENT_LABELS = [
-  { key: "予定", bar: "bg-violet-500", chip: "bg-violet-100 text-violet-900", dot: "#8b5cf6" },
-  { key: "仕事", bar: "bg-slate-500", chip: "bg-slate-200 text-slate-900", dot: "#64748b" },
-  { key: "病院", bar: "bg-rose-500", chip: "bg-rose-100 text-rose-900", dot: "#f43f5e" },
-  { key: "買い物", bar: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-900", dot: "#10b981" },
-  { key: "おでかけ", bar: "bg-sky-500", chip: "bg-sky-100 text-sky-900", dot: "#0ea5e9" },
-  { key: "記念日", bar: "bg-amber-500", chip: "bg-amber-100 text-amber-900", dot: "#f59e0b" },
-] as const;
-
-export type EventLabel = (typeof EVENT_LABELS)[number]["key"];
-
-export const DEFAULT_LABEL: EventLabel = "予定";
-
-export function labelStyle(label: string | null) {
-  return EVENT_LABELS.find((l) => l.key === label) ?? EVENT_LABELS[0];
-}
 
 // ------------------------------------------------------------ 繰り返し
 
