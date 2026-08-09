@@ -159,13 +159,20 @@ export function ShoppingListScreen() {
                       買った分を在庫に入れる({checkedItems.length})
                     </button>
                   )}
+                  <Link
+                    href="/help"
+                    onClick={() => setMenuOpen(false)}
+                    className="block h-12 w-full px-4 text-left text-sm leading-[3rem] active:bg-neutral-100 dark:active:bg-neutral-700"
+                  >
+                    使い方
+                  </Link>
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
                       void syncNow();
                     }}
-                    className="block h-12 w-full px-4 text-left text-sm active:bg-neutral-100 dark:active:bg-neutral-700"
+                    className="block h-12 w-full border-t border-neutral-100 px-4 text-left text-sm active:bg-neutral-100 dark:border-neutral-700 dark:active:bg-neutral-700"
                   >
                     いま同期する
                   </button>

@@ -66,7 +66,7 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-dvh flex-col justify-center px-6">
       <div className="mx-auto w-full max-w-sm">
-        <h1 className="text-2xl font-bold">jisui</h1>
+        <h1 className="text-2xl font-bold">くらし</h1>
         <p className="mt-1 text-sm text-neutral-500">
           最初の1回だけログインします。次からはそのまま開きます。
         </p>
@@ -122,7 +122,14 @@ export default function LoginPage() {
           )}
         </form>
 
-        <p className="mt-8 text-xs leading-relaxed text-neutral-400">
+        <Link
+          href="/help"
+          className="mt-8 block text-sm font-semibold text-emerald-700 underline dark:text-emerald-400"
+        >
+          はじめての方へ(使い方)
+        </Link>
+
+        <p className="mt-4 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
           パスワードを忘れたときは、Supabase の Authentication → Users から
           対象のユーザーを開き、新しいパスワードを設定してください。
         </p>

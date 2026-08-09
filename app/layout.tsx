@@ -4,12 +4,12 @@ import { RegisterSW } from "@/components/RegisterSW";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "買い物リスト | jisui",
-  description: "夫婦2人の自炊管理アプリ",
+  title: "くらし",
+  description: "ふたりの暮らしを1つに。買い物・在庫・レシピ・予定・家計。",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "jisui",
+    title: "くらし",
     statusBarStyle: "default",
   },
   // アイコンは app/icon.png と app/apple-icon.png(Next のファイル規約)から自動で入る

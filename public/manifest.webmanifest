@@ -1,7 +1,7 @@
 {
-  "name": "jisui 買い物リスト",
-  "short_name": "jisui",
-  "description": "夫婦2人の自炊管理。買い物リストをオフラインでもチェックできる。",
+  "name": "くらし",
+  "short_name": "くらし",
+  "description": "ふたりの暮らしを1つに。買い物・在庫・レシピ・予定・家計。",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
