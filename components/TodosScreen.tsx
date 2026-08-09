@@ -10,8 +10,12 @@ import { getServerSnapshot, getSnapshot, subscribe } from "@/lib/store";
 import { useTable } from "@/lib/use-table";
 import type { Todo } from "@/lib/types";
 
-/** 繰り返しの選択肢。予定の繰り返しとは別(やることは隔週・毎年を使わない)。 */
-const REPEATS = ["なし", "毎日", "毎週", "毎月"] as const;
+/**
+ * 繰り返しの選択肢。
+ * 【DB の todos_repeat_check と完全に揃えること】。
+ * ここに無い語を送ると保存の瞬間に check 違反で落ちる。
+ */
+const REPEATS = ["なし", "毎日", "毎週", "隔週", "毎月", "毎年"] as const;
 
 /**
  * やること。
@@ -34,6 +38,7 @@ export function TodosScreen() {
   const [showDone, setShowDone] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const today = todayISO();
 
@@ -64,8 +69,14 @@ export function TodosScreen() {
   const toggle = async (t: Todo) => {
     setBusy(t.id);
     setError(null);
+    setNotice(null);
     try {
-      await setTodoDone(t, t.status === "open");
+      const r = await setTodoDone(t, t.status === "open");
+      // 繰り返すものは行が残って期限だけ進む。
+      // 何も言わないと「完了にならなかった」と見えるので、結果を短く出す。
+      if (r.recurred && r.nextDue) {
+        setNotice(`「${t.title}」を済みにしました。次は ${formatDate(r.nextDue)} です。`);
+      }
       todos.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -106,6 +117,12 @@ export function TodosScreen() {
       {error && (
         <p className="mx-4 mt-3 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:bg-rose-950/50 dark:text-rose-300">
           {error}
+        </p>
+      )}
+
+      {notice && (
+        <p className="mx-4 mt-3 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">
+          {notice}
         </p>
       )}
 
@@ -382,7 +399,7 @@ function TodoSheet({
       {!isChild && (
         <>
           <label className="mt-3 block text-xs font-medium text-neutral-500">繰り返し</label>
-          <div className="mt-1 grid grid-cols-4 gap-1">
+          <div className="mt-1 grid grid-cols-3 gap-1">
             {REPEATS.map((r) => (
               <button
                 key={r}
@@ -399,9 +416,12 @@ function TodoSheet({
             ))}
           </div>
           {repeat !== "なし" && (
-            <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-              完了にすると、次の期限のものが自動で1件作られます
-              {!dueDate && "(期限を入れてください)"}
+            <p className="mt-1 rounded-lg bg-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+              完了を押すと、この行は消えずに<strong>期限が次回に進みます</strong>。
+              中のやることもまとめて未完了に戻ります。
+              行を増やさないのは、全行がスマホの中に保存される作りなためです
+              (毎日のものを1年続けると365行になってしまう)。
+              {!dueDate && " 先に期限を入れてください。"}
             </p>
           )}
         </>

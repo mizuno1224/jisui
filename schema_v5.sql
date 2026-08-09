@@ -415,7 +415,11 @@ create trigger calendar_tags_block_used_private_delete
 
 -- ① lib/event-labels.ts と同じ6種を、全世帯に既定タグとして入れる
 insert into calendar_tags (household_id, name, color, private, owner_id, sort_order)
-select h.id, d.name, d.color, false, null, d.sort_order
+-- 【null::uuid と型を書くこと】
+-- 素の null は型が決まらず、PostgreSQL が text とみなす。
+-- owner_id は uuid なので「column owner_id is of type uuid but expression is
+-- of type text」で落ちる。特に distinct を付けると型の決定が先に走るため必ず出る。
+select h.id, d.name, d.color, false, null::uuid, d.sort_order
 from households h
 cross join (values
   ('予定',     'violet',  0),
@@ -438,7 +442,7 @@ on conflict (household_id, name) where not private do nothing;
 --    古い名前が label に残っていて、それを【公開タグとして】作り直してしまう。
 --    再実行しても安全、と謳っている以上、2回目は必ず起きる前提で書く。
 insert into calendar_tags (household_id, name, color, private, owner_id, sort_order)
-select distinct e.household_id, e.label, 'slate', false, null, 90
+select distinct e.household_id, e.label, 'slate'::text, false, null::uuid, 90
 from events e
 where e.label is not null
   and btrim(e.label) <> ''
@@ -728,13 +732,16 @@ alter table todos add column if not exists repeat_until date;
 
 alter table todos add column if not exists sort_order integer not null default 0;
 
-do $$
-begin
-  if not exists (select 1 from pg_constraint where conname = 'todos_repeat_check') then
-    alter table todos add constraint todos_repeat_check
-      check (repeat in ('なし','毎週','隔週','毎月','毎年'));
-  end if;
-end $$;
+-- 【毎日を入れ忘れないこと】
+-- events の繰り返しには「毎日」が無い(予定を毎日入れる場面が無いため)が、
+-- やることには要る(薬を飲む、水をやる)。アプリとチャットの両方が
+-- 「毎日」を送るので、ここに無いと保存の瞬間に check 違反で落ちる。
+--
+-- if not exists で守らず毎回作り直すのは、過去に「毎日」抜きで作られた
+-- 制約が残っていた場合に、それを直せるようにするため。
+alter table todos drop constraint if exists todos_repeat_check;
+alter table todos add constraint todos_repeat_check
+  check (repeat in ('なし','毎日','毎週','隔週','毎月','毎年'));
 
 create index if not exists todos_parent_idx on todos (parent_id);
 create index if not exists todos_sort_idx on todos (household_id, sort_order, id);

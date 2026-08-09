@@ -587,51 +587,80 @@ export async function saveTodo(input: {
 /**
  * やることを完了/未完了にする。
  *
- * 繰り返すやること(毎週のゴミ出しなど)を完了にしたときは、
- * 次の期限の行を新しく作る。行を作り直す方式にしたのは、
- * 「いつ済ませたか」が1件ずつ残るため。完了日を別表に持つ方式だと
- * 履歴は綺麗だが、画面に出すたびに繰り返しを展開する処理が要る。
+ * 【繰り返すやることは、行を増やさずに期限を進める】
+ *
+ * 毎週のものを完了にしたとき、新しい行を作って古い行を
+ * 履歴として残すやり方もあるが、このアプリでは採らない。
+ * lib/use-table.ts が select * で全行を IndexedDB に書く作りなので、
+ * 行が増え続ける = 端末のキャッシュがそのまま太る。
+ * 毎日のごみ出しを1年続けたら365行になる。
+ *
+ * かわりに、行は1本のまま due_date を次回へ進める。
+ * done_at / done_by は「最後にやった日 / 人」として上書きする。
+ * 子タスクも未完了に戻して、親と一緒に次回へ持っていく。
+ *
+ * 履歴が欲しい繰り返しは、家事(chores / chore_log)の担当。
+ * こちらで二重に持たない。schema_v5.sql の D 章の設計メモと揃えてある。
  */
-export async function setTodoDone(todo: {
-  id: number;
-  status: string;
-  title: string;
-  detail: string | null;
-  due_date: string | null;
-  assignee_id: string | null;
-  parent_id: number | null;
-  repeat: string | null;
-  repeat_until: string | null;
-  sort_order: number;
-}, done: boolean) {
+export async function setTodoDone(
+  todo: {
+    id: number;
+    status: string;
+    due_date: string | null;
+    repeat: string | null;
+    repeat_until: string | null;
+  },
+  done: boolean,
+): Promise<{ recurred: boolean; nextDue: string | null }> {
   const supabase = requireClient();
+
+  const repeats = Boolean(todo.repeat && todo.repeat !== "なし");
+  const next = done && repeats && todo.due_date ? nextDue(todo.due_date, todo.repeat!) : null;
+  // repeat_until を過ぎたら、次回へ進めずに完了で終わらせる
+  const carryOn = next != null && (!todo.repeat_until || next <= todo.repeat_until);
+
+  const patch = carryOn
+    ? {
+        status: "open",
+        due_date: next,
+        done_at: new Date().toISOString(),
+        done_by: getSession().userId,
+      }
+    : {
+        status: done ? "done" : "open",
+        done_at: done ? new Date().toISOString() : null,
+        done_by: done ? getSession().userId : null,
+      };
+
   const { error } = await supabase
     .from("todos")
-    .update({
-      status: done ? "done" : "open",
-      done_at: done ? new Date().toISOString() : null,
-      done_by: done ? getSession().userId : null,
-    })
+    .update(patch)
     .eq("id", todo.id)
     .abortSignal(signal());
   if (error) throw error;
 
-  if (done && todo.repeat && todo.repeat !== "なし" && todo.due_date) {
-    const next = nextDue(todo.due_date, todo.repeat);
-    if (next && (!todo.repeat_until || next <= todo.repeat_until)) {
-      await saveTodo({
-        title: todo.title,
-        detail: todo.detail,
-        dueDate: next,
-        assigneeId: todo.assignee_id,
-        parentId: todo.parent_id,
-        repeat: todo.repeat,
-        repeatUntil: todo.repeat_until,
-        sortOrder: todo.sort_order,
-      });
-    }
+  if (carryOn) {
+    // 子をまとめて未完了に戻す。親だけ進めて子を残すと、
+    // 次の回の準備がすでに済んだことになってしまう。
+    const { error: childError } = await supabase
+      .from("todos")
+      .update({ status: "open", done_at: null, done_by: null })
+      .eq("parent_id", todo.id)
+      .abortSignal(signal());
+    if (childError) throw childError;
+  } else if (done) {
+    // 繰り返さない親を完了にしたら、子もまとめて完了にする。
+    // 親が済んだのに子が未完了で残ると、件数の表示が合わなくなる。
+    await supabase
+      .from("todos")
+      .update({ status: "done", done_at: new Date().toISOString(), done_by: getSession().userId })
+      .eq("parent_id", todo.id)
+      .eq("status", "open")
+      .abortSignal(signal());
   }
+
   invalidate("todos");
+  return { recurred: carryOn, nextDue: carryOn ? next : null };
 }
 
 export async function deleteTodo(id: number) {
@@ -642,18 +671,31 @@ export async function deleteTodo(id: number) {
   invalidate("todos");
 }
 
-/** 次の期限。月末の扱いは予定の繰り返しと同じで、無い日は月末に寄せる。 */
+/**
+ * 次の期限。
+ *
+ * 月末の扱いは予定の繰り返し(lib/event-labels.ts)と同じ。
+ * 31日や 2/29 はその月に無いことがあるので、その月の最終日に寄せる
+ * (月末の支払いは月末に出したい)。
+ * 語彙は DB の todos_repeat_check と完全に揃えること。
+ */
 function nextDue(due: string, repeat: string): string | null {
   const d = new Date(`${due}T00:00:00`);
-  if (repeat === "毎日") d.setDate(d.getDate() + 1);
-  else if (repeat === "毎週") d.setDate(d.getDate() + 7);
-  else if (repeat === "毎月") {
+  const monthly = (months: number) => {
     const day = d.getDate();
     d.setDate(1);
-    d.setMonth(d.getMonth() + 1);
+    d.setMonth(d.getMonth() + months);
     const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     d.setDate(Math.min(day, last));
-  } else return null;
+  };
+
+  if (repeat === "毎日") d.setDate(d.getDate() + 1);
+  else if (repeat === "毎週") d.setDate(d.getDate() + 7);
+  else if (repeat === "隔週") d.setDate(d.getDate() + 14);
+  else if (repeat === "毎月") monthly(1);
+  else if (repeat === "毎年") monthly(12);
+  else return null;
+
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
