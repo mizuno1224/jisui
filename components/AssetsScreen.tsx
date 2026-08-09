@@ -59,9 +59,28 @@ export function AssetsScreen() {
   const assets = accounts.rows.filter((a) => a.kind === "資産" && a.active);
   const debts = accounts.rows.filter((a) => a.kind === "負債" && a.active);
 
+  /*
+   * 【ローンは純資産から差し引かない】
+   *
+   * 差し引くと数字が実態より悪く見える。住んでいる家をこのアプリでは
+   * 資産として記録していないため、家の価値を足さずにローンだけ引くことになり、
+   * 「家を買った瞬間に数千万円損した」という表示になってしまう。
+   * 片方だけ数えるくらいなら、両方数えないほうが読み違えない。
+   *
+   * ローンの残高は消さずに、下に別枠で出す。返済の進み具合は
+   * 「ローンの返済予定」で見る。
+   *
+   * どれをローンとみなすかは【分類】の文字で決める。口座の編集画面から
+   * 変えられるので、アプリ側で決め打ちにしない。
+   */
+  const isLoan = (a: { category: string | null }) => (a.category ?? "").includes("ローン");
+  const loanAccounts = debts.filter(isLoan);
+  const otherDebts = debts.filter((a) => !isLoan(a));
+
   const totalAssets = assets.reduce((s, a) => s + (balanceOf(a.id) ?? 0), 0);
-  const totalDebts = debts.reduce((s, a) => s + (balanceOf(a.id) ?? 0), 0);
-  const net = totalAssets - totalDebts;
+  const totalLoans = loanAccounts.reduce((s, a) => s + (balanceOf(a.id) ?? 0), 0);
+  const totalOtherDebts = otherDebts.reduce((s, a) => s + (balanceOf(a.id) ?? 0), 0);
+  const net = totalAssets - totalOtherDebts;
 
   const monthIncome = useMemo(
     () => income.rows.filter((i) => i.date.startsWith(month)),
@@ -108,6 +127,7 @@ export function AssetsScreen() {
         </Link>
         <h1 className="mt-0.5 text-xs font-medium tracking-wide text-neutral-500">
           {monthLabel(month)}の純資産
+          {totalLoans > 0 && <span className="ml-1">(ローンを除く)</span>}
         </h1>
         <p className="text-2xl font-bold tabular-nums">{yen(net)}</p>
         <div className="mt-2 flex gap-2">
@@ -147,10 +167,31 @@ export function AssetsScreen() {
           <p className="mt-1 text-xl font-bold tabular-nums">{yen(totalAssets)}</p>
         </div>
         <div className="rounded-2xl bg-white p-4 dark:bg-neutral-900">
-          <p className="text-xs font-medium text-neutral-500">負債</p>
-          <p className="mt-1 text-xl font-bold tabular-nums">{yen(totalDebts)}</p>
+          <p className="text-xs font-medium text-neutral-500">
+            {totalLoans > 0 ? "負債(ローン以外)" : "負債"}
+          </p>
+          <p className="mt-1 text-xl font-bold tabular-nums">{yen(totalOtherDebts)}</p>
         </div>
       </section>
+
+      {totalLoans > 0 && (
+        <section className="px-4 pt-3">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-xs font-medium text-neutral-500">ローン残高</p>
+              <p className="text-lg font-bold tabular-nums text-neutral-500 dark:text-neutral-400">
+                {yen(totalLoans)}
+              </p>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+              上の純資産には<strong>含めていません</strong>。
+              住んでいる家をこのアプリでは資産として数えていないので、
+              ローンだけ引くと実態より悪く見えるためです。
+              返済の進み具合は下の「ローンの返済予定」で見られます。
+            </p>
+          </div>
+        </section>
+      )}
 
       <LoadNotice
         loading={accounts.loading && accounts.rows.length === 0}
