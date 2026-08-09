@@ -87,7 +87,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-09.4"
+SKILL_VERSION = "2026-08-10.1"
 
 
 class JisuiError(RuntimeError):
@@ -205,7 +205,7 @@ def _request(method: str, url: str, headers: dict[str, str], body: Any = None) -
         detail = e.read().decode("utf-8", "replace")
         raise JisuiError(f"{method} {url} が失敗しました ({e.code}): {detail}") from e
     except urllib.error.URLError as e:
-        raise JisuiError(f"通信できませんでした: {e.reason}") from e
+        raise JisuiError(f"通信できませんでした: {Jisui._explain_network_error(e.reason)}") from e
 
 
 class Jisui:
@@ -222,6 +222,44 @@ class Jisui:
         self.household_id = self._fetch_household_id()
 
     # ------------------------------------------------------------ 認証
+
+    @staticmethod
+    def _explain_network_error(e: Exception) -> str:
+        """
+        通信できなかったとき、何をすれば直るかまで書いて返す。
+
+        【なぜここまで書くか】
+        「Tunnel connection failed: 403 Forbidden」とだけ出ても、
+        鍵が悪いのか、URL が悪いのか、そもそも出られないのかが分からない。
+        実際にこれで半日つまずいた。原因が分かっている失敗は、
+        原因と直し方を本文に書いておく。
+        """
+        msg = str(e)
+        blocked = ("Tunnel connection failed" in msg) or ("403 Forbidden" in msg and "proxy" in msg.lower())
+        if not blocked:
+            return msg
+        return (
+            msg + "\n"
+            "\n"
+            "【これは鍵の問題ではありません】\n"
+            "いまこのスキルは Anthropic のクラウド(サンドボックス)で動いています。\n"
+            "そこから外に出られる宛先は決められていて、Supabase は入っていません。\n"
+            "pypi や GitHub には出られるのに Supabase だけ弾かれるのはそのためです。\n"
+            "cowork.json や .env をいじっても直りません。宛先の追加は\n"
+            "Team / Enterprise プランの組織設定にしかなく、個人プランでは足せません。\n"
+            "\n"
+            "【直し方】このタスクを【あなたのパソコン上で】動かしてください。\n"
+            "  デスクトップアプリで新しいタスクを始めるとき、\n"
+            "  右上の「Run this task」で実行場所を選べます。パソコン側を選ぶと、\n"
+            "  この制限自体が無くなり、そのまま Supabase に届きます。\n"
+            "\n"
+            "【やってはいけないこと】\n"
+            "  代わりに手元の SQLite(jisui.db / kakeibo.db)へ書かないこと。\n"
+            "  どちらも引退済みで、_引退_2026-08-10 フォルダに移してあります。\n"
+            "  書き込みは成功してしまうのにアプリには何も出てこないため、\n"
+            "  記録が消えたように見えます。実際に半日ぶんそうなりました。\n"
+            "  つながらないときは【記録せずに、その旨を伝える】のが正解です。"
+        )
 
     def whoami(self) -> dict:
         """
