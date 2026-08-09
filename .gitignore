@@ -35,9 +35,13 @@ yarn-error.log*
 !.env.local.example
 !cowork/jisui/.env.example
 
-# Cowork スキルが持つ接続情報とログイントークン
+# Cowork スキルが持つ接続情報とログイントークン。
+# 【cowork.json には専用ユーザーのパスワードが入っている】。
+# GitHub は公開リポジトリなので、ここから外れると即座に漏れる。
+# 名前を変えるときは必ずこの行も直すこと。
 cowork/jisui/.env
 cowork/jisui/.token.json
+cowork/jisui/cowork.json
 __pycache__/
 *.pyc
 

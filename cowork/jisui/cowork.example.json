@@ -1,0 +1,8 @@
+{
+  "_説明": "Cowork(クラウド)から Supabase を読み書きするための接続情報。スキルと一緒に配られる。",
+  "_注意": "このファイルにはパスワードが入っている。スキルは自分の Claude アカウントの中だけに置くこと。漏れたと思ったら Supabase で cowork 専用ユーザーのパスワードを変えれば、それだけで無効化できる(夫・妻のログインには影響しない)。",
+  "JISUI_SUPABASE_URL": "https://xxxx.supabase.co",
+  "JISUI_SUPABASE_KEY": "sb_publishable_xxxxxxxx",
+  "JISUI_EMAIL": "cowork@example.com",
+  "JISUI_PASSWORD": "ここに Supabase で作った専用ユーザーのパスワード"
+}
