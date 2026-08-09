@@ -1,4 +1,4 @@
-// 買い物リストのドメイン型。schema.sql の shopping_list に対応する。
+// 買い物リストのドメイン型。01_schema.sql の shopping_list に対応する。
 
 /** サーバ採番の id は bigint(number)。オフライン中に作った行は一時的に文字列 id を持つ。 */
 export type ItemId = number | string;

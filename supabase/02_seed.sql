@@ -1,4 +1,4 @@
--- jisui 既存データの移行用シード。schema.sql の後に実行する。
+-- jisui 既存データの移行用シード。01_schema.sql の後に実行する。
 -- 実行前に: Supabase Auth で2人分のユーザーを作り、下の household_members を埋めること。
 
 begin;

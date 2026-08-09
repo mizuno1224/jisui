@@ -1,8 +1,8 @@
 -- ============================================================
--- test_private_events.sql — 非公開の予定が本当に隠れているかを実測する
+-- private_events.sql — 非公開の予定が本当に隠れているかを実測する
 --
 -- 【いつ使うか】
---   schema_v5.sql を流したあと1回。以降、予定まわりを触ったときにも流す。
+--   11_schema_v5.sql を流したあと1回。以降、予定まわりを触ったときにも流す。
 --   Supabase の SQL Editor に丸ごと貼って Run するだけ。
 --
 -- 【なぜ要るか】
@@ -43,7 +43,7 @@ begin
   -- ---------------------------------------------------------- 準備
   select hm.household_id into v_household from household_members hm limit 1;
   if v_household is null then
-    raise exception '世帯が1つもありません。schema.sql と patch_members.sql を先に流してください。';
+    raise exception '世帯が1つもありません。01_schema.sql と 03_patch_members.sql を先に流してください。';
   end if;
 
   select user_id, display_name into v_a, v_name_a

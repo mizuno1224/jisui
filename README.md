@@ -5,9 +5,9 @@
 | 読みたいこと | どこ |
 |---|---|
 | **使い方**(操作方法) | **アプリの中**。買い物タブ「⋮」→「使い方」(本文は [lib/help-content.ts](lib/help-content.ts)) |
-| **しくみ**(なぜこう作ったか・どこが壊れやすいか) | [しくみ.md](しくみ.md) |
-| **環境の作り方**(Supabase / Vercel) | [セットアップ手順.md](セットアップ手順.md) |
-| **何を作るつもりだったか** | [設計書.md](設計書.md) |
+| **しくみ**(なぜこう作ったか・どこが壊れやすいか) | [しくみ.md](docs/しくみ.md) |
+| **環境の作り方**(Supabase / Vercel) | [セットアップ手順.md](docs/セットアップ手順.md) |
+| **何を作るつもりだったか** | [設計書.md](docs/設計書.md) |
 | この下 | 開発者向けの手順と注意点 |
 
 | タブ | できること |
@@ -40,7 +40,7 @@ npm run dev
 ```
 
 http://localhost:3000 を開く。環境変数が無いときは **ローカルモード** になり、
-seed.sql と同じ6件をこの端末の中だけで扱う。画面の作りを試すのはこれで足りる。
+02_seed.sql と同じ6件をこの端末の中だけで扱う。画面の作りを試すのはこれで足りる。
 
 ## 2. Supabase につなぐ
 
@@ -50,13 +50,13 @@ Supabase の SQL Editor に、この順で貼って実行する。
 
 | 順 | ファイル | 中身 |
 |---|---|---|
-| 1 | `schema.sql` | テーブル・RLS・リアルタイム設定 |
-| 2 | `seed.sql` | 既存データ(器具11・常備品32・在庫18・レシピ6 ほか) |
-| 3 | `patch_members.sql` | 相手の表示名が読めるようにする(任意。下記) |
-| 4 | `schema_kakeibo.sql` | 家計簿(支出)のテーブル。使うのはフェーズ3 |
-| 5 | `seed_kakeibo.sql` | 取引155件・分類辞書67件 |
+| 1 | `01_schema.sql` | テーブル・RLS・リアルタイム設定 |
+| 2 | `02_seed.sql` | 既存データ(器具11・常備品32・在庫18・レシピ6 ほか) |
+| 3 | `03_patch_members.sql` | 相手の表示名が読めるようにする(任意。下記) |
+| 4 | `04_schema_kakeibo.sql` | 家計簿(支出)のテーブル。使うのはフェーズ3 |
+| 5 | `05_seed_kakeibo.sql` | 取引155件・分類辞書67件 |
 
-`patch_members.sql` は任意。素の `schema.sql` では `household_members` の
+`03_patch_members.sql` は任意。素の `01_schema.sql` では `household_members` の
 SELECT ポリシーが自分の行しか返さないため、「誰がチェックしたか」の欄が
 相手のときに `パートナー` の固定表示になる。実名を出したい場合だけ当てる。
 
@@ -71,7 +71,7 @@ insert into household_members (household_id, user_id, display_name) values
   ('00000000-0000-4000-8000-000000000001', '<妻のuser_id>', '妻');
 ```
 
-世帯 id は `seed.sql` が作る固定値。**ここを入れないと RLS で1件も見えない。**
+世帯 id は `02_seed.sql` が作る固定値。**ここを入れないと RLS で1件も見えない。**
 
 ### 2-3. ログイン方式(パスワード)
 
@@ -189,44 +189,47 @@ Service Worker はアプリ本体をキャッシュしているが、`sw.js` の
 ## ファイルの見取り図
 
 ```
-app/                    画面(/ 買い物、/inventory、/recipes、/plan、/spending、/login)
-components/             画面部品。BottomNav が5つのタブ
+app/                    画面。/ がホーム、/shopping が買い物リスト
+components/             画面部品。BottomNav が6つのタブ
 lib/store.ts            買い物リストの状態と同期。ここを読めば挙動が分かる
 lib/inventory-store.ts  在庫。store.ts と同じ「まず手元、送信は後追い」
-lib/use-table.ts        読み取り中心のデータ(レシピ・献立・取引)の共通処理
+lib/use-table.ts        読み取り中心のデータ(予定・レシピ・家計)の共通処理
 lib/local-db.ts         IndexedDB(items / inventory / outbox / cache / meta)
-lib/mutations.ts        献立・調理記録の書き込み(オンライン時のみ)
+lib/mutations.ts        オンライン時のみの書き込み(予定・やること・家計)
+lib/calendar-window.ts  縦スクロールカレンダーの座標計算
+lib/tags.ts             予定のタグの色。非公開かどうかは DB 側が持つ
 lib/matching.ts         在庫名と材料名のゆるい突き合わせ
-lib/supabase/           クライアント。環境変数が無ければ null を返す
+lib/help-content.ts     【使い方の唯一の出どころ】。/help がこれを読む
 public/sw.js            Service Worker(手書き。画面を変えたら VERSION を上げる)
-scripts/gen-icons.mjs   アイコン生成 → npm run gen:icons
-cowork/jisui/           チャット側から同じ Supabase を触るための道具
-*.sql                   Supabase に流すもの(設計書と同梱)
+
+supabase/               Supabase に流す SQL。番号順に実行する → supabase/README.md
+  patches/              一度きりの修正
+  tests/                実測で確かめるもの(非公開の検査など)
+docs/                   読み物 → docs/README.md
+  経緯/                 その時どう判断したかの記録。運用には要らない
+scripts/                実行するもの(アイコン生成・移行・スキル配布)
+cowork/jisui/           チャット側から同じ Supabase を触るための道具【正本】
 ```
+
+**`cowork/jisui/` が正本です。**`~/.claude/skills/jisui/` は
+`scripts/sync-skill.ps1` で配った写し。片方だけ直すと、古いほうが動き続けます。
+一度これで半日ぶんの記録がどこにも届かない事故を起こしています。
 
 ## SQL の実行順
 
-| 順 | ファイル | 備考 |
-|---|---|---|
-| 1 | `schema.sql` | テーブルと RLS |
-| 2 | `seed.sql` | 既存データ |
-| 3 | `patch_members.sql` | 相手の表示名を読めるようにする(任意) |
-| 4 | `schema_kakeibo.sql` | 家計簿(支出のみ) |
-| 5 | `seed_kakeibo.sql` | 取引155件・分類辞書67件 |
-| 6 | **`patch_views_rls.sql`** | **必須。** ビューが RLS を迂回する穴をふさぐ |
-| 7 | `schema_v2.sql` | 予定・家事・予算・資産・収入 |
-| 8 | `schema_v3.sql` | 予定のラベル・繰り返し・やりとり |
-| 9 | `schema_v4.sql` | 資産の内訳・保有銘柄・監視銘柄・俸給表・ローン予定・やること |
-| 10 | `seed_v4.sql` | 家計簿アプリから移してきたデータ |
-| 11 | **`schema_v5.sql`** | 予定のタグと**非公開の予定**・やることの親子と繰り返し・予定の場所/URL/持ち物/通知 |
+**[supabase/README.md](supabase/README.md) に移しました。**番号順に流します。
 
-6 番は後から見つかった問題の修正。素の `schema_kakeibo.sql` が作るビューは
-PostgreSQL の既定で「作成者の権限」で動くため、**ログインしていない相手にも
-家計データを返してしまう**。公開鍵は誰でも読めるので実害がある。必ず当てる。
+`06_patch_views_rls.sql` は必ず当てること。素の `04_schema_kakeibo.sql` が作る
+ビューは PostgreSQL の既定で「作成者の権限」で動くため、**ログインしていない
+相手にも家計データを返してしまう**。公開鍵は誰でも読めるので実害がある。
 
-## 次にやること(設計書 フェーズ2以降)
+`11_schema_v5.sql` を流したあとは `supabase/tests/private_events.sql` を実行して、
+非公開の予定が本当に隠れているかを実測すること。
 
-7. 在庫画面(冷蔵/冷凍/常温、+/-、期限警告)
-8. チェック済みを在庫へ流し込む導線
-10-13. レシート撮影 → Claude API → 在庫と支出へ同時登録
-14. Cowork の jisui スキルを Supabase 対応に書き換え
+## 次にやること
+
+- 予定の通知(いまは記録するだけで鳴らない。実現にはサーバから送る仕組みが要る)
+- やることの並べ替え(sort_order は用意済み。操作が未実装)
+- カード明細CSVの一括取り込み(旧・家計簿スキルにあった機能。移行時に落ちた)
+
+できないことの一覧は [docs/しくみ.md](docs/しくみ.md) の「まだ無いもの」を見ること。

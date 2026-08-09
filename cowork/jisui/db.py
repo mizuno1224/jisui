@@ -96,7 +96,7 @@ class JisuiError(RuntimeError):
 
 def _v5_error(err: JisuiError) -> JisuiError:
     """
-    schema_v5.sql をまだ流していないときのエラーは
+    11_schema_v5.sql をまだ流していないときのエラーは
     「column events.location does not exist」のようにそっけない。
     何をすれば直るのかが分かる文言に言い換えて返す。
     """
@@ -104,7 +104,7 @@ def _v5_error(err: JisuiError) -> JisuiError:
     if "does not exist" in text or "42P01" in text or "PGRST204" in text or "PGRST205" in text:
         return JisuiError(
             "予定のタグ・場所・持ち物・通知、TODO の子タスクと繰り返しは、\n"
-            "schema_v5.sql を Supabase で実行してから使えます。まだのようです。\n"
+            "11_schema_v5.sql を Supabase で実行してから使えます。まだのようです。\n"
             f"(元のエラー: {text})"
         )
     return err
@@ -500,7 +500,7 @@ class Jisui:
 
     # -------------------------------------------------- 予定(カレンダー)
     #
-    # ここから下は schema_v5.sql を実行してから使える。
+    # ここから下は 11_schema_v5.sql を実行してから使える。
     # v5 で足す想定の形(SQL 側で名前を変えたときは、この節も一緒に直すこと):
     #
     #   alter table events add column location text;       -- 場所
@@ -646,7 +646,7 @@ class Jisui:
             "created_by": self.user_id,
             "repeat": repeat,
         }
-        # 値が None の列は送らない。schema_v5.sql をまだ流していない環境でも、
+        # 値が None の列は送らない。11_schema_v5.sql をまだ流していない環境でも、
         # 新しい列を使わないかぎり今までどおり予定を入れられるようにするため。
         optional = {
             "end_date": end_date, "start_time": start_time, "end_time": end_time,
@@ -829,7 +829,7 @@ class Jisui:
 
     # ---------------------------------------------------- やること(TODO)
     #
-    # schema_v5.sql で足す想定:
+    # 11_schema_v5.sql で足す想定:
     #   alter table todos add column parent_id bigint references todos(id) on delete cascade;
     #   alter table todos add column repeat text not null default 'なし';
     #   alter table todos add column repeat_until date;

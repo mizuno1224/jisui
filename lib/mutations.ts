@@ -600,7 +600,7 @@ export async function saveTodo(input: {
  * 子タスクも未完了に戻して、親と一緒に次回へ持っていく。
  *
  * 履歴が欲しい繰り返しは、家事(chores / chore_log)の担当。
- * こちらで二重に持たない。schema_v5.sql の D 章の設計メモと揃えてある。
+ * こちらで二重に持たない。11_schema_v5.sql の D 章の設計メモと揃えてある。
  */
 export async function setTodoDone(
   todo: {
@@ -665,7 +665,7 @@ export async function setTodoDone(
 
 export async function deleteTodo(id: number) {
   const supabase = requireClient();
-  // 子は on delete cascade で一緒に消える(schema_v5.sql)
+  // 子は on delete cascade で一緒に消える(11_schema_v5.sql)
   const { error } = await supabase.from("todos").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
   invalidate("todos");

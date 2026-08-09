@@ -1,10 +1,10 @@
 -- ============================================================
--- schema_v5.sql — カレンダーのタグ化と「非公開の予定」
+-- 11_schema_v5.sql — カレンダーのタグ化と「非公開の予定」
 --
 -- 【いつ実行するか】
---   schema.sql → seed.sql → patch_members.sql → schema_kakeibo.sql
---   → seed_kakeibo.sql → patch_views_rls.sql → schema_v2.sql → schema_v3.sql
---   → schema_v4.sql → seed_v4.sql の【次】。Supabase の SQL Editor に
+--   01_schema.sql → 02_seed.sql → 03_patch_members.sql → 04_schema_kakeibo.sql
+--   → 05_seed_kakeibo.sql → 06_patch_views_rls.sql → 07_schema_v2.sql → 08_schema_v3.sql
+--   → 09_schema_v4.sql → 10_seed_v4.sql の【次】。Supabase の SQL Editor に
 --   このファイルを丸ごと貼って1回で流す。
 --
 -- 【何のためのファイルか】
@@ -74,7 +74,7 @@ alter function public.my_household_ids() set search_path = public, pg_temp;
 --   events.owner_id でも events.created_by でもない。
 --
 --   ・events.owner_id は「誰の予定か」という【表示上の区分】で、
---     schema_v2.sql のコメントどおり “個人予定も相手からは見える” が今の意味。
+--     07_schema_v2.sql のコメントどおり “個人予定も相手からは見える” が今の意味。
 --     ここに秘密の意味を後付けすると、本番に入っている既存の個人予定が
 --     実行した瞬間に全部相手から消える。実データを壊す。使わない。
 --   ・events.created_by は「誰が入力したか」の作業ログ。null でも保存できるし、
@@ -394,7 +394,7 @@ create trigger calendar_tags_block_used_private_delete
   before delete on calendar_tags
   for each row execute function public.calendar_tags_block_used_private_delete();
 
--- (参考)events.end_time は schema_v2.sql の時点で存在するが、
+-- (参考)events.end_time は 07_schema_v2.sql の時点で存在するが、
 -- lib/mutations.ts の saveEvent が書いていないので本番は全行 null。
 -- 列を足す必要は無い。フォームに欄を足せばそのまま入る。
 
@@ -640,14 +640,14 @@ create policy event_comments_private_guard on event_comments
   using      (not app_private.event_hidden_from_me(event_id))
   with check (not app_private.event_hidden_from_me(event_id));
 
--- (索引は schema_v3.sql の event_comments_event_idx (event_id, created_at) が
+-- (索引は 08_schema_v3.sql の event_comments_event_idx (event_id, created_at) が
 --  そのまま効くので足さない)
 
 
 -- ------------------------------------------------------------
 -- C-5. Supabase Realtime — 行の存在が通知だけで漏れないか
 --
--- events は schema_v2.sql:132 で、event_comments は schema_v3.sql:65 で
+-- events は 07_schema_v2.sql:132 で、event_comments は 08_schema_v3.sql:65 で
 -- publication supabase_realtime に入っている。
 --
 --  ・INSERT / UPDATE の通知は、購読者ごとに RLS を評価してから配られる。
@@ -677,7 +677,7 @@ create policy event_comments_private_guard on event_comments
 -- ------------------------------------------------------------
 
 -- (ビューは1つも作らない。作るときは必ず security_invoker = on。
---  patch_views_rls.sql のとおり、既定のビューは作成者権限で動いて
+--  06_patch_views_rls.sql のとおり、既定のビューは作成者権限で動いて
 --  RLS を素通りし、過去に家計データが匿名に見えていた事故がある)
 
 

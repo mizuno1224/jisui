@@ -16,7 +16,7 @@ import type { Budget, CookLog, Transaction } from "@/lib/types";
  *
  * 同梱SQLのビュー(v_monthly_by_category / v_cost_per_meal)は使わず、
  * transactions と cook_log から画面側で集計している。ビューは RLS を
- * 迂回してしまう作りだったため(patch_views_rls.sql 参照)、素の表だけを読む。
+ * 迂回してしまう作りだったため(06_patch_views_rls.sql 参照)、素の表だけを読む。
  */
 export function SpendingScreen() {
   const tx = useTable<Transaction>("transactions", { orderBy: "date", ascending: false });

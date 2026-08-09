@@ -1,7 +1,7 @@
 /**
  * 手元の家計簿(kakeibo.db)を Supabase へ移すための SQL を作る。
  *
- *   node scripts/migrate-kakeibo.mjs > seed_v4.sql
+ *   node scripts/migrate-kakeibo.mjs > 10_seed_v4.sql
  *
  * なぜ生成するのか:
  *   手で書き写すと必ず抜けるし、金額を1桁間違えても気づけない。
@@ -47,7 +47,7 @@ const say = (s) => out.push(s);
 say(`-- ============================================================`);
 say(`-- 手元の家計簿(kakeibo.db)からの移行データ`);
 say(`-- scripts/migrate-kakeibo.mjs が生成。手で編集しない。`);
-say(`-- schema_v4.sql の後に実行する。`);
+say(`-- 09_schema_v4.sql の後に実行する。`);
 say(`-- 何度実行しても増えない(既にある行は飛ばす)。`);
 say(`-- ============================================================`);
 say(``);

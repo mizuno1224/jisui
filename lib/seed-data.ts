@@ -1,12 +1,12 @@
 import type { ShoppingItem } from "./types";
 
-/** seed.sql と同じ世帯 id。ローカルモードでもデータ形を揃えておく。 */
+/** 02_seed.sql と同じ世帯 id。ローカルモードでもデータ形を揃えておく。 */
 export const LOCAL_HOUSEHOLD_ID = "00000000-0000-4000-8000-000000000001";
 
 type SeedRow = Pick<ShoppingItem, "item" | "qty" | "reason" | "section" | "sort_order">;
 
 /**
- * Supabase 未設定のときだけ使う初期データ。seed.sql の shopping_list と同じ 6 件。
+ * Supabase 未設定のときだけ使う初期データ。02_seed.sql の shopping_list と同じ 6 件。
  * 接続後はサーバ側が唯一の正になるので、これは使われない。
  */
 const SEED_ROWS: SeedRow[] = [

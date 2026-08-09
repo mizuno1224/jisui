@@ -185,8 +185,8 @@ for (const r of srcRecipes) {
 
 // ------------------------------------------------------------ レシピ材料
 //
-// recipe_ingredients に household_id は無い(schema.sql:84-91)。
-// 世帯は recipes 経由で判定される(RLS は schema.sql:162-165)。
+// recipe_ingredients に household_id は無い(01_schema.sql:84-91)。
+// 世帯は recipes 経由で判定される(RLS は 01_schema.sql:162-165)。
 // household_id を送ると「そんな列は無い」で落ちるので、絶対に足さない。
 // recipe_id は上で入れたレシピを名前で引き直して使う。
 for (const r of srcRecipes) {
@@ -228,7 +228,7 @@ add(
   `在庫「玉ねぎ」の置き場所を 常温 → ${onion.location} に直す`,
   [
     `SQLite の ${onion.updated_at}(UTC)の書き込みが最新。Supabase 側は移行時のまま常温になっている。`,
-    "本当の置き場所は野菜室だが、schema.sql:59-60 の check が 冷蔵/冷凍/常温 しか通さないので今は入れられない。",
+    "本当の置き場所は野菜室だが、01_schema.sql:59-60 の check が 冷蔵/冷凍/常温 しか通さないので今は入れられない。",
     "  区画を増やすのはこのスクリプトの仕事ではない(schema と lib/types.ts:40 の両方を直す別作業)。",
     "  常温よりは冷蔵のほうが実物に近いので、SQLite の値をそのまま入れる。",
     `updated_at が ${onion.updated_at} より新しければ触らない。8/9 より後にアプリで直していたら、そちらを尊重する。`,
@@ -387,7 +387,7 @@ if (!APPLY) {
   lines.push("・8/7 の献立(外食=実施)。Supabase 側のほうが新しい");
   lines.push("・在庫のたまご(Supabase 9個 / SQLite 10個)。減った記録は Supabase にしかない");
   lines.push("・cook_log。8/9 時点で SQLite・Supabase とも 8/6 の1件だけで同じ");
-  lines.push("・schema.sql と lib/types.ts。玉ねぎを野菜室にするには別途この2つを直す必要がある");
+  lines.push("・01_schema.sql と lib/types.ts。玉ねぎを野菜室にするには別途この2つを直す必要がある");
   lines.push("");
   lines.push("------------------------------------------------------------");
   lines.push("実際に流すには");

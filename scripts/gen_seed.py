@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""現行 jisui.db から Supabase 用の seed.sql を生成する。
+"""現行 jisui.db から Supabase 用の 02_seed.sql を生成する。
 使い方: python3 gen_seed.py <jisui.dbのパス> <recipesフォルダのパス> [出力先]
-生成された seed.sql は schema.sql 実行後に Supabase の SQL Editor に貼って実行する。
+生成された 02_seed.sql は 01_schema.sql 実行後に Supabase の SQL Editor に貼って実行する。
 """
 import sqlite3, sys, os
 
 db = sys.argv[1]
 recipes_dir = sys.argv[2]
-out = sys.argv[3] if len(sys.argv) > 3 else "seed.sql"
+out = sys.argv[3] if len(sys.argv) > 3 else "02_seed.sql"
 
 con = sqlite3.connect(db)
 con.row_factory = sqlite3.Row
@@ -28,7 +28,7 @@ def boolit(v):
 
 
 L = []
-L.append("-- jisui 既存データの移行用シード。schema.sql の後に実行する。")
+L.append("-- jisui 既存データの移行用シード。01_schema.sql の後に実行する。")
 L.append("-- 実行前に: Supabase Auth で2人分のユーザーを作り、下の household_members を埋めること。")
 L.append("")
 L.append("begin;")

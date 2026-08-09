@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""kakeibo.db + 分類辞書.csv から Supabase 用の seed_kakeibo.sql を生成する。
+"""kakeibo.db + 分類辞書.csv から Supabase 用の 05_seed_kakeibo.sql を生成する。
 移すのは transactions と 分類辞書 のみ(資産・負債・給与・投資方針は移さない)。
 使い方: python3 gen_seed_kakeibo.py <kakeibo.db> <分類辞書.csv> [出力先]
 """
@@ -7,7 +7,7 @@ import sqlite3, csv, sys
 
 db = sys.argv[1]
 dic = sys.argv[2]
-out = sys.argv[3] if len(sys.argv) > 3 else "seed_kakeibo.sql"
+out = sys.argv[3] if len(sys.argv) > 3 else "05_seed_kakeibo.sql"
 H = "'00000000-0000-4000-8000-000000000001'"
 
 
@@ -19,7 +19,7 @@ def lit(v):
     return "'" + str(v).replace("'", "''") + "'"
 
 
-L = ["-- 家計簿(支出)の移行用シード。schema_kakeibo.sql の後に実行する。",
+L = ["-- 家計簿(支出)の移行用シード。04_schema_kakeibo.sql の後に実行する。",
      "-- 資産・負債・給与・投資方針は移さない(手元の kakeibo.db に残す)。", "", "begin;", ""]
 
 L.append("-- 分類辞書")

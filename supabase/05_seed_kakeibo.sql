@@ -1,4 +1,4 @@
--- 家計簿(支出)の移行用シード。schema_kakeibo.sql の後に実行する。
+-- 家計簿(支出)の移行用シード。04_schema_kakeibo.sql の後に実行する。
 -- 資産・負債・給与・投資方針は移さない(手元の kakeibo.db に残す)。
 
 begin;
