@@ -18,6 +18,7 @@ import { looseMatch, normalizeText } from "@/lib/matching";
 import { useTable } from "@/lib/use-table";
 import {
   LOCATIONS,
+  LOCATION_INFO,
   type InventoryItem,
   type Location,
   type MealPlan,
@@ -142,6 +143,26 @@ export function InventoryScreen() {
           placeholder="食材を探す(場所を問わず)"
           className="mt-2 h-11 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base outline-none focus:border-emerald-500 dark:border-neutral-700 dark:bg-neutral-800"
         />
+        {/*
+         * 5区画のタブ。横スクロールにはしていない。実測ではなく計算で確かめた:
+         *
+         *   幅 390px(iPhone 14)
+         *     - ScreenHeader の px-4 …… 390 - 16×2 = 358px
+         *     - この箱の p-1 ……………… 358 -  4×2 = 350px
+         *     - gap-1 が 4 つ ………… 350 -  4×4 = 334px
+         *     → flex-1 の 1 タブ = 334 / 5 = 66.8px
+         *   中身は「冷蔵」14px×2文字 = 28px + ml-1 の 4px + 件数 12px×2桁 ≒ 13px
+         *     = 45.2px。余白 21.6px なので折り返さない。
+         *   一番狭い 320px の端末でも 1 タブ 52.8px あり、45.2px は収まる。
+         *
+         * だから短い呼び名(2文字)を保つことが、この段の前提になっている。
+         * 区画を増やす/名前を長くするときは、上の式でもう一度確かめること。
+         * 横スクロールにしなかったのは、隠れたタブがあると冷蔵庫の前で
+         * 「氷温タブが無い」と誤解されるため。5つとも常に見えているほうがよい。
+         *
+         * 高さは h-10(40px)から h-11(44px)に上げた。区画が増えて1タブが
+         * 細くなったぶん、濡れた指の当たり判定を縦で稼ぐ。
+         */}
         <div
           className={`mt-3 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800 ${
             query.trim() ? "opacity-40" : ""
@@ -154,7 +175,10 @@ export function InventoryScreen() {
                 key={loc}
                 type="button"
                 onClick={() => setTab(loc)}
-                className={`h-10 flex-1 rounded-lg text-sm font-semibold transition-colors ${
+                // PC で開いたときだけ出るふきだし。スマホでは出ないので、
+                // 正式名は下の1行(選んでいる区画の説明)が本命。
+                title={`${LOCATION_INFO[loc].full}(${LOCATION_INFO[loc].note})`}
+                className={`h-11 flex-1 whitespace-nowrap rounded-lg text-sm font-semibold transition-colors ${
                   tab === loc
                     ? "bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-neutral-50"
                     : "text-neutral-500"
@@ -166,6 +190,16 @@ export function InventoryScreen() {
             );
           })}
         </div>
+        {/*
+         * 選んでいる区画が冷蔵庫のどこで、何を入れる場所なのかを1行で出す。
+         * 「氷温」「野菜」は 2 文字だけでは伝わらないので、これが無いと
+         * 使い方画面まで見に行かないと分からない。検索中はタブが効かないので隠す。
+         */}
+        {!query.trim() && (
+          <p className="mt-1.5 truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+            {LOCATION_INFO[tab].full}・{LOCATION_INFO[tab].note}
+          </p>
+        )}
       </ScreenHeader>
 
       <LoadNotice
@@ -175,7 +209,9 @@ export function InventoryScreen() {
         emptyText={
           query.trim()
             ? `「${query.trim()}」は見つかりませんでした。`
-            : `${tab}は空です。右下の + で追加できます。`
+            : // 「氷温は空です」だとどの引き出しの話か伝わらないので正式名で出す。
+              // 移行直後の氷温は 0 件が正常(12_schema_v6.sql:288)。壊れて見えないように。
+              `${LOCATION_INFO[tab].full}は空です。右下の + で追加できます。`
         }
       />
 
@@ -336,13 +372,14 @@ function ItemActionSheet({
 
         <div className="mt-3">
           <label className="block text-xs font-medium text-neutral-500">場所</label>
+          {/* 件数が付かないぶんタブより余裕がある(1つ 66.8px に 2文字 28px) */}
           <div className="mt-1 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
             {LOCATIONS.map((loc) => (
               <button
                 key={loc}
                 type="button"
                 onClick={() => setLocationInput(loc)}
-                className={`h-11 flex-1 rounded-lg text-sm font-semibold ${
+                className={`h-11 flex-1 whitespace-nowrap rounded-lg text-sm font-semibold ${
                   location === loc
                     ? "bg-white shadow-sm dark:bg-neutral-700"
                     : "text-neutral-500"
@@ -352,6 +389,10 @@ function ItemActionSheet({
               </button>
             ))}
           </div>
+          {/* 選んだ先がどの引き出しで、入れてよい物かを出す。氷温に豆腐を入れる事故を防ぐ */}
+          <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+            {LOCATION_INFO[location].full}・{LOCATION_INFO[location].note}
+          </p>
         </div>
 
         <button
@@ -485,7 +526,7 @@ function AddInventorySheet({
               key={loc}
               type="button"
               onClick={() => setLoc(loc)}
-              className={`h-11 flex-1 rounded-lg text-sm font-semibold ${
+              className={`h-11 flex-1 whitespace-nowrap rounded-lg text-sm font-semibold ${
                 location === loc ? "bg-white shadow-sm dark:bg-neutral-700" : "text-neutral-500"
               }`}
             >
@@ -493,6 +534,10 @@ function AddInventorySheet({
             </button>
           ))}
         </div>
+        {/* 初期値は開いていたタブ。どの引き出しに入れる話なのかを添える */}
+        <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+          {LOCATION_INFO[location].full}・{LOCATION_INFO[location].note}
+        </p>
 
         <div className="mt-5 flex gap-3">
           <button

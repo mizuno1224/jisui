@@ -33,6 +33,14 @@ export type InventorySnapshot = {
   pending: number;
   syncing: boolean;
   error: string | null;
+  /**
+   * 送れないまま行列に残っている操作があるか。
+   *
+   * 「送ったが拒否された(= 捨ててよい)」と
+   * 「データベース側の準備がまだで送れない(= 捨ててはいけない)」を分ける。
+   * 立っている間は、成功時にエラー表示を消さない。
+   */
+  blocked: boolean;
 };
 
 const INITIAL: InventorySnapshot = {
@@ -41,6 +49,7 @@ const INITIAL: InventorySnapshot = {
   pending: 0,
   syncing: false,
   error: null,
+  blocked: false,
 };
 
 let snapshot: InventorySnapshot = INITIAL;
@@ -135,7 +144,9 @@ export async function syncNow() {
   try {
     await flushOutbox();
     await pull();
-    emit({ error: null });
+    // blocked のときは消さない。消すと「置き場所を DB が知らない」という
+    // 案内が pull() の往復のあいだだけ出て消え、利用者は何が起きたか分からない。
+    if (!snapshot.blocked) emit({ error: null });
     bindRealtime();
   } catch (e) {
     emit({ error: errorMessage(e) });
@@ -155,6 +166,31 @@ async function flushOutbox() {
     } catch (e) {
       // 通信失敗・中断は code:"" / status:0 で返るので拒否と区別する
       if (!isPermanent(e)) throw e;
+
+      /*
+       * 【23514(check 制約違反)は捨ててはいけない】
+       *
+       * これは「操作が間違っている」のではなく、
+       * 「データベースがまだ新しい置き場所を知らない」だけ。
+       * 冷蔵庫の区画を3つから5つに増やしたとき、SQL を流す前にアプリが出ると
+       * 「氷温」「野菜」がここで弾かれる。
+       *
+       * 捨てると本当にどこにも残らない。買い物リストから在庫へ移す処理は
+       * 先に買い物リスト側を消しているので、買い物1回分が丸ごと消える。
+       * だから行列に残し、SQL を流したあとの再送で入るようにする。
+       * 後続の操作も同じ理由で落ちるので、ここで止めてよい。
+       */
+      if ((e as { code?: string }).code === "23514") {
+        emit({
+          blocked: true,
+          error:
+            "置き場所をデータベースがまだ知りません。" +
+            "supabase/12a_schema_v6_constraint.sql を実行してください。" +
+            "未送信のぶんは消していません。",
+        });
+        return;
+      }
+
       emit({ error: `送信できなかった操作を1件破棄しました: ${errorMessage(e)}` });
     }
     await local.dequeue(op.opId);

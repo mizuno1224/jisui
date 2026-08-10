@@ -9,7 +9,10 @@
 // このファイルの中身が変わると、ブラウザが新しい Service Worker として入れ直し、
 // 古いキャッシュ(activate で削除)ごと画面を作り直す。
 // 上げ忘れると、圏外で起動したときだけ古い画面が出る。
-const VERSION = "v14";
+// v15: 在庫の区画を3つ(冷蔵/冷凍/常温)から5つ(冷蔵/氷温/野菜/冷凍/常温)に広げた。
+//      ここを上げないと、古いキャッシュを持った端末が3タブのままになり、
+//      '氷温' や '野菜' の在庫がどのタブにも出ない = 消えたように見える。
+const VERSION = "v15";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;

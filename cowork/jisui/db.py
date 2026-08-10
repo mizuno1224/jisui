@@ -27,10 +27,15 @@ Cowork(チャット)から Supabase の jisui データを読み書きするた�
 from __future__ import annotations
 
 import base64
+import contextlib
+import csv
 import hashlib
+import io
 import json
 import os
+import re
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,6 +57,65 @@ def _days_between(iso_a: str, iso_b: str) -> int:
 def _now() -> str:
     """timestamptz に入れる「今」。done_at のように時刻まで要る列に使う。"""
     return datetime.now(timezone.utc).isoformat()
+
+
+# ============================================================
+# 店名のならし方
+#
+# 【なぜ要るか — 実物の CSV を開いて分かったこと】
+# カード会社は同じ店を違う字で書いてくる。
+#   三井住友 … 「ＥＴＣ  中部地区」「ＡＭＡＺＯＮ．ＣＯ．ＪＰ」(英数字が全角、間に空白)
+#   楽天     … 「ＶＩＳＡ海外利用　UBER   *TRIP」(全角と半角が混ざる)
+#   イオン   … 「マックスバリュ〈全角空白〉大府」(桁合わせの全角空白が入る)
+# いっぽう分類辞書(expense_rules)のキーワードは
+# 「ETC」「Amazon」のように人が読む形で入っている
+# (supabase/05_seed_kakeibo.sql を見ると全部そう)。
+#
+# つまり素の部分一致では【1件も当たらない】。実際の CSV で確かめた。
+# そこで NFKC(全角→半角にそろえる)・空白落とし・大文字化をしてから照合する。
+# これは「AI が費目を推測する」のとは違う。辞書に書いてある文字列を
+# 見つけやすくしているだけなので、再現性は保たれる。
+#
+# 【吸収できないゆれ】長音のゆれは直せない。
+#   「コ－プアイチ」の「－」は全角ハイフンで、NFKC では "-" になる。
+#   辞書の「コープ」の「ー」(長音記号)とは別の字なので当たらない。
+#   当たらなければ「初見の店」として人に出る。黙って別の費目を付けるより安全なので、
+#   ここは直さず、人が辞書に足す流儀のままにしてある。
+# ============================================================
+
+_SPACES = re.compile(r"[\s　]+")
+
+# 8桁以上の数字の連なりは口座番号・カード番号とみなして伏せる。
+# 店名に8桁の数字が続くことはまず無い。CSV に番号列が紛れ込んでも
+# データベースに残さないための最後の網(禁止事項の「番号は保存しない」)。
+_LONG_DIGITS = re.compile(r"\d{8,}")
+
+
+def _clean_text(text: str | None) -> str:
+    """
+    明細に書かれた文字を、意味を変えずに読める形にする。
+    連続する空白(全角含む)を1つにするだけ。**言葉は書き換えない。**
+
+    なぜ空白だけ潰すか: あれは桁合わせの飾りであって中身ではない。
+    しかも明細を落とし直すと飾りの数が変わることがあり、そのままだと
+    dedup_hash が変わって同じ買い物が二重に入る。
+    """
+    return _SPACES.sub(" ", (text or "").strip())
+
+
+def _mask_numbers(text: str) -> str:
+    """口座番号・カード番号らしき数字の並びを伏せる。保存前に必ず通す。"""
+    return _LONG_DIGITS.sub("********", text)
+
+
+def _normalize_merchant(text: str | None) -> str:
+    """
+    照合用にならした店名。transactions.merchant_norm にもこれを入れる。
+    全角→半角、空白を落とす、大文字にそろえる。
+    """
+    if not text:
+        return ""
+    return _SPACES.sub("", unicodedata.normalize("NFKC", text)).upper()
 
 
 # 繰り返しの言い方。DB の check 制約と同じ並びにしてある(events_repeat_check)。
@@ -87,11 +151,164 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-10.1"
+SKILL_VERSION = "2026-08-10.3"
+
+
+# つながらないときの受け渡し場所。
+# ここは Cowork(エージェント)が読み書きできる接続済みフォルダで、
+# db.py 自身(サンドボックスの中)からは書けない。だからこの定数は
+# 「エージェントに書いてもらう場所」を伝えるためだけに使う。
+INBOX_DIR = r"C:\Users\mmizu\家計簿\inbox"
+
+# 受け渡し JSON の目印と版。
+# 次の工程で「この JSON を読んで Supabase に適用するスクリプト」を別の人が書く。
+# 形を変えたときは HANDOFF_VERSION を上げて、適用側が古い形を見分けられるようにする。
+HANDOFF_KIND = "jisui-handoff"
+HANDOFF_VERSION = 1
+
+
+# 在庫の置き場所。
+# 【supabase/12a_schema_v6_constraint.sql の check 制約と1文字も違わないこと】。
+# ずれると保存が全部弾かれる。うちの冷蔵庫(日立 R-HWC54Y)固有の分け方で、
+# 一般的な食品分類ではない。買い替えたら作り直しになる。
+INVENTORY_LOCATIONS = ("冷蔵", "氷温", "野菜", "冷凍", "常温")
 
 
 class JisuiError(RuntimeError):
     pass
+
+
+class JisuiOffline(JisuiError):
+    """
+    Supabase に届かなかった。**書き込みは1行も起きていない。**
+
+    【なぜ専用の例外にして、しかも中身を持たせるのか】
+    Cowork(チャット)がクラウドで動いていると、外に出られる宛先が決まっていて
+    Supabase は入っていない。そこで例外を投げて終わりにすると、
+    せっかく人が話した内容(レシート・買い物・予定)がその場で消える。
+    実際、消えたように見えて手元の SQLite に書いてしまう事故が起きた。
+
+    だからこの例外は【何を書けば復旧できるか】を丸ごと抱えて出る。
+    受け取った側(エージェント)は e.handoff() を呼び、返ってきた
+    「ファイル名」と「中身」をそのまま INBOX_DIR に保存すればよい。
+    db.py はサンドボックスの中なので自分では保存できない。書くのは
+    ファイルを扱えるエージェントの仕事、という分担にしてある。
+
+        try:
+            j = Jisui()
+            j.add_receipt(date="2026-08-10", amount=1200, merchant_raw="ライフ")
+        except JisuiOffline as e:
+            print(e.handoff())   # → {"ファイル名": ..., "中身": ..., "件数": 1}
+            # ここで返ってきた「中身」を INBOX_DIR に「ファイル名」で保存する
+
+    records が空のこともある(Jisui() を作る途中で落ちた場合など)。
+    そのときは handoff() モジュール関数で、書きたい操作を自分で組み立てる。
+    """
+
+    def __init__(self, message: str, records: list[dict] | None = None) -> None:
+        super().__init__(message)
+        self.records = records or []
+
+    def handoff(self, note: str | None = None) -> dict:
+        """保存すべきファイル名と中身。records が空なら「中身」は None。"""
+        if not self.records:
+            return {"ファイル名": None, "中身": None, "件数": 0,
+                    "覚書": "残すべき操作が分かりません。handoff() で組み立ててください。"}
+        return handoff(*[(r["op"], r["args"]) for r in self.records], note=note)
+
+
+def _canonical(value: Any) -> str:
+    """
+    引数を「並びの違いで変わらない文字列」にする。
+    同じ操作から必ず同じ鍵が出るようにするため(dict の順序に左右されない)。
+    default=str は date や Decimal が混ざっても落ちないようにする保険。
+    """
+    return json.dumps(value, sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":"), default=str)
+
+
+def _handoff_record(op: str, args: dict) -> dict:
+    """
+    受け渡し JSON の1件分。
+
+    key は op と args だけから作る。**作った時刻は入れない。**
+    入れてしまうと、同じ内容を2回書き出しただけで別物になり、
+    適用側が二重に入れてしまう。「同じ操作は同じ鍵」が守れなくなる。
+    """
+    key = hashlib.sha256(f"{op}|{_canonical(args)}".encode("utf-8")).hexdigest()
+    return {"op": op, "args": args, "key": key}
+
+
+def handoff(*ops: Any, note: str | None = None) -> dict:
+    """
+    つながらないときに inbox へ残す JSON を組み立てる。**通信しない。**
+
+        from db import handoff
+        h = handoff(("add_receipt", {"date": "2026-08-10", "amount": 1200,
+                                     "merchant_raw": "ライフ 西宮店", "category": "食費"}))
+        h["ファイル名"]  # → "handoff-20260810T083012Z-1-3f9a1c04.json"
+        h["中身"]        # → JSON の文字列。これをそのまま INBOX_DIR に保存する
+
+    ops は ("操作名", {引数}) の組か、{"op":…, "args":…} の辞書。
+    使える操作名は SKILL.md の表に書いてある(add_receipt / add_shopping /
+    insert / import_card_row / add_rule / add_event / add_todo)。
+
+    【ファイル名が内容だけで決まるようにしてある】
+    同じ内容をもう一度書き出すと同じ名前になるので、上書きになって増えない。
+    時刻は名前の先頭に入るが、鍵(末尾8桁)は内容だけから作る。
+    """
+    records: list[dict] = []
+    for item in ops:
+        if isinstance(item, dict) and "op" in item:
+            records.append(_handoff_record(item["op"], item.get("args") or {}))
+        elif isinstance(item, (tuple, list)) and len(item) == 2:
+            records.append(_handoff_record(item[0], item[1]))
+        else:
+            raise JisuiError(
+                "handoff() には (\"操作名\", {引数}) の組か "
+                "{\"op\":…, \"args\":…} を渡してください。受け取った値: " + repr(item)
+            )
+    if not records:
+        raise JisuiError("残す操作が1件もありません。")
+
+    payload = {
+        "kind": HANDOFF_KIND,
+        "version": HANDOFF_VERSION,
+        "created_at": _now(),
+        "skill_version": SKILL_VERSION,
+        "note": note,
+        "records": records,
+    }
+    # ファイル名の末尾は【全レコードの鍵から作る】。中身が同じなら名前も同じ。
+    digest = hashlib.sha256("".join(r["key"] for r in records).encode("utf-8")).hexdigest()[:8]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return {
+        "ファイル名": f"handoff-{stamp}-{len(records)}-{digest}.json",
+        "中身": json.dumps(payload, ensure_ascii=False, indent=2),
+        "件数": len(records),
+        "保存先": INBOX_DIR,
+    }
+
+
+# いま試みている操作を積んでおく場所。
+# _request が通信の壁にぶつかったとき、「何をしようとしていたのか」を
+# ここから取り出して JisuiOffline に持たせる。
+# 入れ子になったときは【一番外側】を使う。add_receipt の中の insert より、
+# add_receipt そのもののほうが人にとって意味のある単位だから。
+# (会話から順に呼ぶ使い方しか想定していないので、スレッド安全ではない)
+_HANDOFF_STACK: list[list[dict]] = []
+
+
+@contextlib.contextmanager
+def _capturing(*ops: Any):
+    """この中で通信が壁に当たったら、ops を抱えた JisuiOffline にする。"""
+    _HANDOFF_STACK.append([
+        _handoff_record(o[0], o[1]) if isinstance(o, (tuple, list)) else o for o in ops
+    ])
+    try:
+        yield
+    finally:
+        _HANDOFF_STACK.pop()
 
 
 def _v5_error(err: JisuiError) -> JisuiError:
@@ -205,7 +422,26 @@ def _request(method: str, url: str, headers: dict[str, str], body: Any = None) -
         detail = e.read().decode("utf-8", "replace")
         raise JisuiError(f"{method} {url} が失敗しました ({e.code}): {detail}") from e
     except urllib.error.URLError as e:
-        raise JisuiError(f"通信できませんでした: {Jisui._explain_network_error(e.reason)}") from e
+        # 【ここが「通信の壁」の検知点】
+        # 例外を投げて終わりにせず、いま試みていた操作を抱えて出る。
+        # そうしないと、話してもらった内容がその場で消える(JisuiOffline の説明を読む)。
+        records = _HANDOFF_STACK[0] if _HANDOFF_STACK else []
+        hint = ""
+        if records:
+            hint = (
+                "\n\n【この内容は失われていません】\n"
+                f"残すべき操作が {len(records)} 件あります。\n"
+                "  h = e.handoff()\n"
+                f"として返ってきた h[\"中身\"] を、h[\"ファイル名\"] という名前で\n"
+                f"  {INBOX_DIR}\n"
+                "に保存してください(保存するのはあなたの仕事です。db.py はそのフォルダに書けません)。\n"
+                "【手元の SQLite には絶対に書かないこと。】書けば “成功” してしまい、\n"
+                "アプリには何も出てこないまま記録が消えます。"
+            )
+        raise JisuiOffline(
+            f"通信できませんでした: {Jisui._explain_network_error(e.reason)}{hint}",
+            records,
+        ) from e
 
 
 class Jisui:
@@ -406,12 +642,15 @@ class Jisui:
     def insert(self, table: str, rows: list[dict]) -> list[dict]:
         """household_id は自動で補う。付け忘れると RLS に弾かれるため。"""
         payload = [{"household_id": self.household_id, **row} for row in rows]
-        return _request(
-            "POST",
-            f"{self.url}/rest/v1/{table}",
-            self._headers({"Prefer": "return=representation"}),
-            payload,
-        ) or []
+        # household_id は入れずに残す。適用するのは別の人・別の世帯かもしれないので、
+        # 受け渡し JSON には「何を入れたいか」だけを書き、世帯は適用側が付ける。
+        with _capturing(("insert", {"table": table, "rows": rows})):
+            return _request(
+                "POST",
+                f"{self.url}/rest/v1/{table}",
+                self._headers({"Prefer": "return=representation"}),
+                payload,
+            ) or []
 
     def update(self, table: str, patch: dict, **filters: str) -> list[dict]:
         query = urllib.parse.urlencode(filters)
@@ -454,14 +693,39 @@ class Jisui:
           {"item": "鶏むね肉", "qty": "2枚", "reason": "8/9 唐揚げ", "section": "肉・魚"}
         常備品にあるもの・米は載せない(設計書5)。判断は呼ぶ側で行う。
         """
-        base = self.select("shopping_list", "sort_order")
-        next_order = max((r["sort_order"] for r in base), default=0) + 10
-        rows = []
-        for i, item in enumerate(items):
-            rows.append({"sort_order": next_order + i * 10, "status": "未購入", **item})
-        return self.insert("shopping_list", rows)
+        # sort_order を取りに行く select も壁に当たる。だから並べ替えの前から包む。
+        with _capturing(("add_shopping", {"items": items})):
+            base = self.select("shopping_list", "sort_order")
+            next_order = max((r["sort_order"] for r in base), default=0) + 10
+            rows = []
+            for i, item in enumerate(items):
+                rows.append({"sort_order": next_order + i * 10, "status": "未購入", **item})
+            return self.insert("shopping_list", rows)
 
     def add_inventory(self, items: list[dict]) -> list[dict]:
+        """
+        在庫に足す。{"name","qty","unit","location","expiry","price","bought_on"}
+
+        【送る前に location を確かめる理由】
+        add_receipt は先に transactions を1行入れてから、あとでここを呼ぶ。
+        ここで check 制約違反(23514)を食らって失敗すると、入れ直したときに
+        支出側の重複よけが当たって「済んだこと」になり、
+        【支出だけ入って在庫が永久に入らない】状態になる。
+        あとから見ても原因が分からない壊れ方なので、通信する前に止める。
+        """
+        for i, it in enumerate(items):
+            loc = it.get("location")
+            if loc is not None and loc not in INVENTORY_LOCATIONS:
+                raise JisuiError(
+                    "在庫 %d 件目「%s」の location が %r です。使えるのは %s のどれか。\n"
+                    "うちの冷蔵庫(日立 R-HWC54Y)の引き出しに対応している。\n"
+                    "肉・魚は氷温、葉物と根菜は野菜、玉ねぎ・いも類・未開封の調味料は常温。\n"
+                    "切ってある野菜は冷蔵(氷温に入れてはいけない)。"
+                    % (i + 1, it.get("name"), loc, " / ".join(INVENTORY_LOCATIONS))
+                )
+        return self._add_inventory_raw(items)
+
+    def _add_inventory_raw(self, items: list[dict]) -> list[dict]:
         """在庫に足す。{"name","qty","unit","location","expiry","price","bought_on"}"""
         return self.insert("inventory", items)
 
@@ -636,29 +900,37 @@ class Jisui:
             start_time = None
             end_time = None
 
-        owner_id = self.user_id if mine else None
-        tag_id = self._resolve_tag_id(tag)
-
-        row: dict[str, Any] = {
-            "date": date,
-            "title": title,
-            "owner_id": owner_id,
-            "created_by": self.user_id,
-            "repeat": repeat,
+        # つながらないとき用の控え。タグを引く select も壁に当たるので、その前から包む。
+        _args = {
+            "date": date, "title": title, "start_time": start_time, "end_time": end_time,
+            "end_date": end_date, "all_day": all_day, "memo": memo, "location": location,
+            "url": url, "items": items, "notify_min": notify_min, "tag": tag,
+            "mine": mine, "repeat": repeat, "repeat_until": repeat_until,
         }
-        # 値が None の列は送らない。11_schema_v5.sql をまだ流していない環境でも、
-        # 新しい列を使わないかぎり今までどおり予定を入れられるようにするため。
-        optional = {
-            "end_date": end_date, "start_time": start_time, "end_time": end_time,
-            "memo": memo, "location": location, "url": url, "items": items,
-            "notify_min": notify_min, "tag_id": tag_id, "repeat_until": repeat_until,
-        }
-        row.update({k: v for k, v in optional.items() if v is not None})
+        with _capturing(("add_event", _args)):
+            owner_id = self.user_id if mine else None
+            tag_id = self._resolve_tag_id(tag)
 
-        try:
-            return self.insert("events", [row])[0]
-        except JisuiError as e:
-            raise _v5_error(e) from e
+            row: dict[str, Any] = {
+                "date": date,
+                "title": title,
+                "owner_id": owner_id,
+                "created_by": self.user_id,
+                "repeat": repeat,
+            }
+            # 値が None の列は送らない。11_schema_v5.sql をまだ流していない環境でも、
+            # 新しい列を使わないかぎり今までどおり予定を入れられるようにするため。
+            optional = {
+                "end_date": end_date, "start_time": start_time, "end_time": end_time,
+                "memo": memo, "location": location, "url": url, "items": items,
+                "notify_min": notify_min, "tag_id": tag_id, "repeat_until": repeat_until,
+            }
+            row.update({k: v for k, v in optional.items() if v is not None})
+
+            try:
+                return self.insert("events", [row])[0]
+            except JisuiError as e:
+                raise _v5_error(e) from e
 
     def update_event(self, event_id: int, **patch: Any) -> dict:
         """
@@ -894,6 +1166,26 @@ class Jisui:
         """
         if repeat is not None and repeat not in TODO_REPEATS:
             raise JisuiError(f"repeat は {' / '.join(TODO_REPEATS)} のどれか。受け取った値: {repeat}")
+        # つながらないとき用の控え。担当を引く select も壁に当たるので、その前から包む。
+        _args = {
+            "title": title, "due_date": due_date, "assignee": assignee,
+            "parent_id": parent_id, "repeat": repeat, "subtasks": subtasks,
+            "detail": detail,
+        }
+        with _capturing(("add_todo", _args)):
+            return self._add_todo(**_args)
+
+    def _add_todo(
+        self,
+        title: str,
+        due_date: str | None = None,
+        assignee: str | None = None,
+        parent_id: int | None = None,
+        repeat: str | None = None,
+        subtasks: list[str] | None = None,
+        detail: str | None = None,
+    ) -> dict:
+        """add_todo の中身。引数は add_todo とまったく同じ。"""
         if parent_id is not None:
             parent = self._todo(parent_id)
             if parent.get("parent_id"):
@@ -1196,6 +1488,42 @@ class Jisui:
         filters = {} if include_done else {"status": "eq.open"}
         return self.select("todos", "*", order="id", **filters)
 
+    def rules(self) -> list[dict]:
+        """
+        分類辞書を1回だけ取ってきて、照合する順に並べて返す。
+
+        【並べ方: キーワードの長い順】
+        「イオン」(食費)と「イオンシネマ」(娯楽)の両方が辞書にあるとき、
+        長いほうを先に見ないと、細かく足した規則がいつまでも勝てない。
+        長さが同じものは id 順(先に登録したほうが先)。
+        こう決めておけば、何度取り込んでも同じ費目になる。**再現性がこの機能の命。**
+        """
+        rows = self.select("expense_rules", "keyword,category", order="id")
+        rows.sort(key=lambda r: -len(r.get("keyword") or ""))   # 安定ソートなので同長は id 順のまま
+        return rows
+
+    @staticmethod
+    def match_rule(rules: list[dict], merchant: str) -> str | None:
+        """
+        辞書 rules と店名 merchant を照合して費目を返す。当たらなければ None。
+
+        2段構え。まず書いてあるままで部分一致を見て、駄目なら
+        ならした形(_normalize_merchant)で見る。
+        1段目を先に見るのは、これまでの当たり方を変えないため。
+        2段目は当たる範囲を広げるだけで、狭めることはない。
+        """
+        for rule in rules:
+            kw = rule.get("keyword") or ""
+            if kw and kw in merchant:
+                return rule["category"]
+
+        norm = _normalize_merchant(merchant)
+        for rule in rules:
+            kw = _normalize_merchant(rule.get("keyword"))
+            if kw and kw in norm:
+                return rule["category"]
+        return None
+
     def classify(self, merchant: str) -> str | None:
         """
         店名から費目を引く。分類辞書(expense_rules)に部分一致させる。
@@ -1203,11 +1531,12 @@ class Jisui:
         AI の判断で辞書と違う費目を付けないこと。同じ店がその時々で
         違う費目になると、月次の比較が意味を失う。
         辞書に無い店は None を返すので、必ず本人に確認してから追記する。
+
+        1件ずつ引くたびに辞書を取りに行く。何十件も回すときは
+        rules() で1回だけ取ってから match_rule() を使うこと
+        (import_card_csv はそうしている)。
         """
-        for rule in self.select("expense_rules", "keyword,category"):
-            if rule["keyword"] and rule["keyword"] in merchant:
-                return rule["category"]
-        return None
+        return self.match_rule(self.rules(), merchant)
 
     def add_rule(self, keyword: str, category: str, note: str | None = None) -> None:
         """分類辞書に足す。本人の承認を得てから呼ぶ。"""
@@ -1235,37 +1564,591 @@ class Jisui:
         レシート1枚を、支出と在庫の両方に記録する(設計書 5-2)。
         items は receipt_items 用({"item","price"})、inventory は在庫に入れるもの。
         同じレシートを2回入れても増えないよう dedup_hash で弾く。
+
+        つながらないときは JisuiOffline が出る。**その例外はこのレシートの中身を
+        丸ごと抱えている**ので、e.handoff() を inbox に保存すれば記録は失われない。
         """
-        digest = self.dedup_hash(date, amount, merchant_raw)
-        existing = self.select("transactions", "id", dedup_hash=f"eq.{digest}")
-        if existing:
-            return {"transaction": existing[0], "skipped": True}
+        # 引数をそのまま受け渡し用に控える。順番も名前も add_receipt の引数のまま
+        # なので、適用側は j.add_receipt(**args) と呼ぶだけでよい。
+        _args = {
+            "date": date, "amount": amount, "merchant_raw": merchant_raw,
+            "category": category, "source": source, "items": items,
+            "inventory": inventory, "needs_review": needs_review, "memo": memo,
+        }
+        with _capturing(("add_receipt", _args)):
+            digest = self.dedup_hash(date, amount, merchant_raw)
+            existing = self.select("transactions", "id", dedup_hash=f"eq.{digest}")
+            if existing:
+                return {"transaction": existing[0], "skipped": True}
 
-        tx = self.insert(
-            "transactions",
-            [
-                {
-                    "date": date,
-                    "amount": amount,
-                    "merchant_raw": merchant_raw,
+            tx = self.insert(
+                "transactions",
+                [
+                    {
+                        "date": date,
+                        "amount": amount,
+                        "merchant_raw": merchant_raw,
+                        "category": category,
+                        "source": source,
+                        "memo": memo,
+                        "dedup_hash": digest,
+                        "needs_review": needs_review,
+                    }
+                ],
+            )[0]
+
+            if items:
+                _request(
+                    "POST",
+                    f"{self.url}/rest/v1/receipt_items",
+                    self._headers({"Prefer": "return=representation"}),
+                    [{"transaction_id": tx["id"], **i} for i in items],
+                )
+            added = self.add_inventory(inventory) if inventory else []
+            return {"transaction": tx, "inventory": added, "skipped": False}
+
+    # ------------------------------------------- カード明細 CSV の一括取り込み
+
+    def import_card_csv(
+        self,
+        path: str | None = None,
+        *,
+        data: bytes | str | None = None,
+        dry_run: bool = True,
+        on_unknown: str = "stop",
+    ) -> dict:
+        """
+        カード明細の CSV を読んで transactions に入れる。**既定では書き込まない。**
+
+        引退した家計簿スキル(C:\\Users\\mmizu\\家計簿\\skills\\_kakeibo_引退\\SKILL.md)に
+        あった機能を、Supabase 版として戻したもの。流儀はそのまま:
+
+          ・費目は分類辞書(expense_rules)で機械的に決める。
+            **AI の判断で辞書と違う費目を付けない**(同じ店が月ごとに違う費目に
+            なると、月次の比較が意味を失う)
+          ・辞書に無い店は「初見の店」として報告するだけ。**勝手に辞書へ足さない**
+          ・二重計上は dedup_hash で弾く
+          ・口座番号・カード番号は列ごと捨てる
+
+        【2回に分けて呼ぶ】
+            r = j.import_card_csv(path)                 # 1回目: 読むだけ。何も書かない
+            # r["初見の店"] を本人に見せて、費目を決めてもらう
+            j.add_rule("マックスバリュ", "食費")          # 承認されたぶんだけ辞書に足す
+            r = j.import_card_csv(path, dry_run=False)  # 2回目: ここで初めて入る
+            j.archive_csv(path)                         # 報告してから processed/ へ移す
+
+        on_unknown:
+          "stop"   (既定) 初見の店が残っていたら書き込まずに止める
+          "review" 初見の行を費目「要確認」・needs_review=True で入れる。
+                   辞書には足さない(足すのは人の承認を得た add_rule だけ)
+
+        data を渡せば、ファイルを開かずに中身から直接読める。
+        Cowork のサンドボックスから C:\\Users\\mmizu\\家計簿 が見えないとき、
+        エージェントが自分で読んだ中身を渡すために使う。
+        """
+        if on_unknown not in ("stop", "review"):
+            raise JisuiError('on_unknown は "stop" か "review" のどちらかです。')
+        if data is None:
+            if path is None:
+                raise JisuiError("path か data のどちらかを渡してください。")
+            data = Path(path).read_bytes()
+
+        parsed = parse_card_csv(data, name=str(path) if path else None)
+        rows = parsed["行"]
+
+        # 【通信の壁に当たったときの備え】
+        # 1行=1レコードで控える。費目はここでは付けない。辞書が引けないからで、
+        # 費目を決めるのは inbox の JSON を適用する側(つながる場所)の仕事。
+        with _capturing(*[("import_card_row", dict(r)) for r in rows]):
+            rules = self.rules()
+
+            table: list[dict] = []
+            for r in rows:
+                table.append({
+                    **r,
+                    "category": self.match_rule(rules, r["merchant_raw"]),
+                    "dedup_hash": self.dedup_hash(r["date"], r["amount"], r["merchant_raw"]),
+                })
+
+            # 同じファイルの中で鍵がぶつかる行を先に見つける。
+            # 【実際に起きている】例: 2026/6/16 の「ＥＴＣ 中部地区 540円」が2行。
+            # 別々の料金所を通った本物の2件だが、dedup_hash は
+            # 日付・金額・店名の3つだけで作るので同じ鍵になる。
+            # transactions は (household_id, dedup_hash) が一意なので、
+            # どうやっても1件しか入らない。黙って落とさず、必ず報告する。
+            groups: dict[str, list[dict]] = {}
+            for t in table:
+                groups.setdefault(t["dedup_hash"], []).append(t)
+
+            # すでに入っている鍵を調べる。1件ずつ問い合わせると行数ぶん往復するので
+            # in.(...) でまとめて聞く。URL が長くなりすぎないよう100件ずつに割る。
+            existing: set[str] = set()
+            keys = list(groups)
+            for i in range(0, len(keys), 100):
+                chunk = keys[i:i + 100]
+                got = self.select(
+                    "transactions", "dedup_hash",
+                    dedup_hash="in.(" + ",".join(chunk) + ")",
+                )
+                existing.update(g["dedup_hash"] for g in got)
+
+            fresh = [g[0] for key, g in groups.items() if key not in existing]
+            already = sum(len(g) for key, g in groups.items() if key in existing)
+            crowded = [
+                {"日付": g[0]["date"], "店名": g[0]["merchant_raw"],
+                 "金額": g[0]["amount"], "同じ内容の行数": len(g)}
+                for key, g in groups.items() if len(g) > 1 and key not in existing
+            ]
+
+            unknown: dict[str, dict] = {}
+            for t in fresh:
+                if t["category"] is None:
+                    u = unknown.setdefault(
+                        t["merchant_raw"],
+                        {"店名": t["merchant_raw"], "件数": 0, "合計": 0, "初出": t["date"]},
+                    )
+                    u["件数"] += 1
+                    u["合計"] += t["amount"]
+
+            totals: dict[str, int] = {}
+            for t in fresh:
+                cat = t["category"] or "(辞書に無い)"
+                totals[cat] = totals.get(cat, 0) + t["amount"]
+
+            report: dict[str, Any] = {
+                "ファイル": parsed["ファイル"],
+                "形式": parsed["形式"],
+                "文字コード": parsed["文字コード"],
+                "読んだ行": len(rows),
+                "取込対象": len(fresh),
+                "スキップ(既にある)": already,
+                "スキップ(読めない行)": parsed["読めない行"],
+                # 別々の買い物なのに鍵が同じで入れられない行の【数】。
+                # 一覧だけだと見落とすので、必ず数字でも出す。1件でもあれば報告すること。
+                "入らない行(鍵が同じ)": sum(c["同じ内容の行数"] - 1 for c in crowded),
+                "同じ鍵になってしまう行": crowded,
+                "初見の店": sorted(unknown.values(), key=lambda u: -u["合計"]),
+                "費目別合計": dict(sorted(totals.items(), key=lambda kv: -kv[1])),
+                "書き込んだ": False,
+            }
+
+            if dry_run:
+                report["次にすること"] = (
+                    "初見の店の費目を本人に確認 → add_rule で辞書に足す → "
+                    "import_card_csv(..., dry_run=False) をもう一度呼ぶ"
+                    if unknown else
+                    "import_card_csv(..., dry_run=False) をもう一度呼べば入る"
+                )
+                return report
+
+            if unknown and on_unknown == "stop":
+                names = "、".join(list(unknown)[:10])
+                raise JisuiError(
+                    f"辞書に無い店が {len(unknown)} 件あるので、1行も書き込みませんでした: {names}\n"
+                    "本人に費目を確かめて add_rule(キーワード, 費目) で辞書に足してから、\n"
+                    "もう一度 dry_run=False で呼んでください。\n"
+                    'どうしても後回しにするなら on_unknown="review" で「要確認」として入ります。'
+                )
+
+            payload = []
+            for t in fresh:
+                category = t["category"] or "要確認"
+                payload.append({
+                    "date": t["date"],
+                    "amount": t["amount"],
+                    "merchant_raw": t["merchant_raw"],
+                    "merchant_norm": t["merchant_norm"],
                     "category": category,
-                    "source": source,
-                    "memo": memo,
-                    "dedup_hash": digest,
-                    "needs_review": needs_review,
-                }
-            ],
-        )[0]
+                    "source": t["source"],
+                    "memo": t["memo"],
+                    "dedup_hash": t["dedup_hash"],
+                    # 「要確認」はレシートと重なっている見込みの行。人が見るまで印を残す。
+                    "needs_review": category == "要確認",
+                })
 
-        if items:
-            _request(
-                "POST",
-                f"{self.url}/rest/v1/receipt_items",
-                self._headers({"Prefer": "return=representation"}),
-                [{"transaction_id": tx["id"], **i} for i in items],
+            # self.insert を使わず自分で投げているのは Prefer に
+            # resolution=ignore-duplicates を足したいから。
+            # 鍵の重なりは上で除いてあるが、途中で人がアプリから同じものを入れる
+            # 可能性がある。それで 409 になると、その塊の全部が入らない。
+            # 取りこぼしを黙って捨てるほうを選ぶ(一意制約が最後の砦になる)。
+            inserted: list[dict] = []
+            for i in range(0, len(payload), 100):
+                got = _request(
+                    "POST",
+                    f"{self.url}/rest/v1/transactions?on_conflict=household_id,dedup_hash",
+                    self._headers({"Prefer": "return=representation,resolution=ignore-duplicates"}),
+                    [{"household_id": self.household_id, **row} for row in payload[i:i + 100]],
+                )
+                inserted.extend(got or [])
+
+            report["書き込んだ"] = True
+            report["取込件数"] = len(inserted)
+            report["次にすること"] = (
+                f"結果を報告してから archive_csv({parsed['ファイル']!r}) で processed/ へ移す"
             )
-        added = self.add_inventory(inventory) if inventory else []
-        return {"transaction": tx, "inventory": added, "skipped": False}
+            return report
+
+    @staticmethod
+    def archive_csv(path: str, processed_dir: str | None = None) -> str:
+        """
+        取り込みの終わった CSV を inbox/ から processed/ へ移す。
+
+        **取り込みを報告したあとで呼ぶ。**先に移すと、報告の途中で失敗したときに
+        元の場所から消えていて、何を取り込もうとしたのか分からなくなる。
+
+        同じ名前が processed/ にあっても【上書きしない】。
+        カード会社は毎月おなじ名前(202608.csv など)で明細を出すので、
+        上書きすると先月ぶんの原本が消える。-2, -3 と番号を足して残す。
+
+        このパソコン上で動いているときだけ使える。Cowork(クラウド)からは
+        そのフォルダが見えないので、移動はエージェントのファイル操作でやる。
+        """
+        src = Path(path)
+        if not src.exists():
+            raise JisuiError(f"ファイルがありません: {src}")
+        if processed_dir:
+            dst_dir = Path(processed_dir)
+        elif src.parent.name == "inbox":
+            dst_dir = src.parent.parent / "processed"
+        else:
+            dst_dir = src.parent / "processed"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+
+        dst = dst_dir / src.name
+        n = 2
+        while dst.exists():
+            dst = dst_dir / f"{src.stem}-{n}{src.suffix}"
+            n += 1
+        src.replace(dst)
+        return str(dst)
+
+
+# ============================================================
+# カード明細 CSV の読み取り
+#
+# 【推測で書いていない。実物を開いて確かめた形だけを扱う】
+#   C:\Users\mmizu\家計簿\processed\ にある本物の CSV が根拠。
+#
+#   三井住友カード  202608*.csv          cp932 / 見出し無し / 13列
+#   楽天カード      enavi*.csv           utf-8(BOM付) / 見出し有り / 12列
+#   イオンカード    meisai*.csv          cp932 / 前置き有り / 9列
+#
+# 同じフォルダに口座明細(RB-torihikimeisai.csv / ny*.csv /
+# nyushukinmeisai_*.csv)も混ざっているが、【わざと扱わない】。理由は2つ。
+#   1. 口座明細にはカード代金の引落が入っている。カード明細と両方入れると
+#      同じ買い物を2回数えることになる
+#   2. ny*.csv の日付は「6月5日」で年が書いていない。年を当てるのは推測になる
+# 見分けて、その旨を言って止める。黙って読み違えるより良い。
+# ============================================================
+
+_SLASH_DATE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})$")
+_YYMMDD_DATE = re.compile(r"^(\d{2})(\d{2})(\d{2})$")
+
+# 口座明細の見出し。見つけたら「カード明細ではない」と言って止めるために使う。
+_BANK_HEADERS = {
+    "取引日": "住信SBIネット銀行の口座明細",
+    "取扱日付": "銀行口座の入出金明細(年が書かれていない)",
+}
+
+
+def _date_slash(text: str) -> str | None:
+    """2026/7/29 → 2026-07-29。読めなければ None。"""
+    m = _SLASH_DATE.match(unicodedata.normalize("NFKC", (text or "").strip()))
+    if not m:
+        return None
+    try:
+        return _date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+    except ValueError:
+        return None
+
+
+def _date_yymmdd(text: str) -> str | None:
+    """
+    260612 → 2026-06-12。イオンカードの明細は西暦の下2桁で書かれている。
+    2000年代しか出ない前提で 2000 を足す(このスキルが扱う範囲では問題にならない)。
+    """
+    m = _YYMMDD_DATE.match(unicodedata.normalize("NFKC", (text or "").strip()))
+    if not m:
+        return None
+    try:
+        return _date(2000 + int(m[1]), int(m[2]), int(m[3])).isoformat()
+    except ValueError:
+        return None
+
+
+def _to_int(text: str) -> int | None:
+    """
+    金額を整数の円にする。読めなければ None(推測で埋めない)。
+    全角数字・カンマ・￥・値引のマイナスに対応する。
+    """
+    t = unicodedata.normalize("NFKC", (text or "").strip())
+    for ch in (",", "¥", "\\", " ", "円"):
+        t = t.replace(ch, "")
+    if not t:
+        return None
+    negative = t[0] in "-△▲"
+    t = t.lstrip("-+△▲")
+    if not t.isdigit():
+        return None
+    return -int(t) if negative else int(t)
+
+
+def _card_row(date: str, amount: int, merchant: str, source: str, memo: list[str]) -> dict:
+    """明細1行 →  transactions に入れる形。番号らしきものはここで伏せる。"""
+    raw = _mask_numbers(_clean_text(merchant))
+    return {
+        "date": date,
+        "amount": amount,
+        "merchant_raw": raw,
+        "merchant_norm": _normalize_merchant(raw),
+        "source": source,
+        "memo": " / ".join(m for m in memo if m) or None,
+    }
+
+
+def _parse_smbc(rows: list[list[str]]) -> tuple[list[dict], list[dict]]:
+    """
+    三井住友カード。見出し行が無く、1行目からいきなり明細。
+      0 利用日 2026/7/29   1 店名   2 利用者   3 支払方法   5 支払月 '26/08
+      6 利用金額(円)   7 当月支払額   9 現地通貨額   10 通貨   11 レート
+    金額は 6列目を使う。7列目は国内利用のときしか入っておらず、
+    海外利用の行が丸ごと 0 円になってしまうため。
+    """
+    good: list[dict] = []
+    bad: list[dict] = []
+    for n, r in enumerate(rows, 1):
+        if not any(c.strip() for c in r):
+            continue
+        if len(r) < 7:
+            bad.append({"行": n, "理由": "列が足りない", "中身": r})
+            continue
+        date = _date_slash(r[0])
+        if date is None:
+            bad.append({"行": n, "理由": f"日付として読めない: {r[0]!r}", "中身": r})
+            continue
+        amount = _to_int(r[6])
+        if amount is None:
+            bad.append({"行": n, "理由": f"金額として読めない: {r[6]!r}", "中身": r})
+            continue
+
+        memo = []
+        user = _clean_text(r[2])
+        if user and user != "ご本人":
+            memo.append(f"利用者:{user}")
+        pay = _clean_text(r[3])
+        if pay and pay != "1回払い":
+            memo.append(pay)
+        billing = _clean_text(r[5]).lstrip("'")
+        if billing:
+            memo.append(f"請求{billing}")
+        if len(r) > 11 and _clean_text(r[10]):
+            memo.append(f"{_clean_text(r[9])} {_clean_text(r[10])} @{_clean_text(r[11])}")
+        good.append(_card_row(date, amount, r[1], "三井住友カード", memo))
+    return good, bad
+
+
+def _parse_rakuten(rows: list[list[str]]) -> tuple[list[dict], list[dict]]:
+    """
+    楽天カード(e-NAVI)。見出し行がある。
+      0 利用日 2026/07/31   1 利用店名・商品名   2 利用者   3 支払方法
+      4 利用金額   5 手数料/利息   6 支払総額   7 支払月
+    金額は 4列目(利用金額)。6列目の支払総額は手数料込みなので、
+    買い物そのものの額と混ざる。
+    """
+    good: list[dict] = []
+    bad: list[dict] = []
+    for n, r in enumerate(rows, 1):
+        if not any(c.strip() for c in r):
+            continue
+        if _clean_text(r[0]) == "利用日":       # 見出し
+            continue
+        if len(r) < 5:
+            bad.append({"行": n, "理由": "列が足りない", "中身": r})
+            continue
+        date = _date_slash(r[0])
+        if date is None:
+            bad.append({"行": n, "理由": f"日付として読めない: {r[0]!r}", "中身": r})
+            continue
+        amount = _to_int(r[4])
+        if amount is None:
+            bad.append({"行": n, "理由": f"金額として読めない: {r[4]!r}", "中身": r})
+            continue
+
+        memo = []
+        user = _clean_text(r[2])
+        if user and user != "本人":
+            memo.append(f"利用者:{user}")
+        pay = _clean_text(r[3])
+        if pay and pay != "1回払い":
+            memo.append(pay)
+        fee = _to_int(r[5]) if len(r) > 5 else None
+        if fee:
+            memo.append(f"手数料{fee}円")
+        billing = _clean_text(r[7]) if len(r) > 7 else ""
+        if billing:
+            memo.append(f"請求{billing}")
+        good.append(_card_row(date, amount, r[1], "楽天カード", memo))
+    return good, bad
+
+
+def _parse_aeon(rows: list[list[str]]) -> tuple[list[dict], list[dict]]:
+    """
+    イオンカード。明細の前に請求金額と【引落口座】が書いてある。
+
+      0 ご利用カード / 1 今回ご請求金額 / 2 お支払い日 / 3 ご指定口座
+      4 金融機関,支店,口座番号,名義人     ← ここに口座番号と名義がある
+      5 その中身
+      6 ご利用明細                        ← ここから下だけを読む
+      7 ご利用日,利用者区分,ご利用先,支払方法,,,ご利用金額,備考
+
+    【「ご利用明細」が出るまで1行も見ない】ことで、口座番号と名義人を
+    そもそも手に取らない。禁止事項の「番号は保存しない」を、
+    捨てるのではなく最初から拾わないやり方で守る。
+
+    日付が空で金額が負の行は「会員値引」。直前の買い物にぶら下がる値引なので、
+    直前の行の日付を継ぐ。値引を買い物の額から引かずに別の行として残すのは、
+    明細の合計とデータベースの合計を突き合わせられるようにするため。
+    """
+    good: list[dict] = []
+    bad: list[dict] = []
+
+    start = next((i for i, r in enumerate(rows) if r and _clean_text(r[0]) == "ご利用明細"), None)
+    if start is None:
+        return good, [{"行": 0, "理由": "「ご利用明細」の行が見つからない", "中身": []}]
+    head = next(
+        (i for i in range(start + 1, len(rows)) if rows[i] and _clean_text(rows[i][0]) == "ご利用日"),
+        None,
+    )
+    if head is None:
+        return good, [{"行": start + 1, "理由": "明細の見出し行が見つからない", "中身": []}]
+
+    last_date: str | None = None
+    for n in range(head + 1, len(rows)):
+        r = rows[n]
+        if not any(c.strip() for c in r):
+            continue
+        first = _clean_text(r[0])
+        # ここから先は「分割・ボーナス払い明細」の別表。列の意味が変わるので読まない。
+        if first.startswith("分割") or "ボーナス" in first:
+            break
+        if len(r) < 7:
+            bad.append({"行": n + 1, "理由": "列が足りない", "中身": r})
+            continue
+        amount = _to_int(r[6])
+        if amount is None:
+            bad.append({"行": n + 1, "理由": f"金額として読めない: {r[6]!r}", "中身": r})
+            continue
+
+        if first:
+            date = _date_yymmdd(first)
+            if date is None:
+                bad.append({"行": n + 1, "理由": f"日付として読めない: {first!r}", "中身": r})
+                continue
+            last_date = date
+        else:
+            if last_date is None:
+                bad.append({"行": n + 1, "理由": "日付が空で、継ぐ相手もいない", "中身": r})
+                continue
+            date = last_date                 # 会員値引の行
+
+        memo = []
+        who = _clean_text(r[1])
+        if who and who != "本人":
+            memo.append(f"利用者:{who}")
+        note = _clean_text(r[7]) if len(r) > 7 else ""
+        if note:
+            memo.append(note)
+        good.append(_card_row(date, amount, r[2], "イオンカード", memo))
+    return good, bad
+
+
+_CARD_PARSERS = {
+    "三井住友カード": _parse_smbc,
+    "楽天カード": _parse_rakuten,
+    "イオンカード": _parse_aeon,
+}
+
+
+def _decode_csv(data: bytes | str) -> tuple[str, str]:
+    """
+    文字コードを見分けて読む。カード会社ごとに違い、Shift-JIS(cp932)が多い。
+    utf-8 を先に試すのは、日本語の cp932 は utf-8 として読むと必ず失敗するから
+    (取り違えない)。逆に utf-8 の中身を cp932 で読むと文字化けしたまま通ってしまう。
+    """
+    if isinstance(data, str):
+        return data, "(文字列で受け取った)"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig"), "utf-8-sig"
+    for enc in ("utf-8", "cp932"):
+        try:
+            return data.decode(enc), enc
+        except UnicodeDecodeError:
+            pass
+    # ここに来るのは想定外。読めない字を伏せて進め、文字コード名でそれと分かるようにする。
+    return data.decode("cp932", "replace"), "cp932(読めない字あり)"
+
+
+def _detect_card_format(rows: list[list[str]]) -> str:
+    """どのカード会社の明細かを見分ける。分からなければ空文字。"""
+    head = [_clean_text(c) for c in (rows[0] if rows else [])]
+    if head[:2] == ["利用日", "利用店名・商品名"]:
+        return "楽天カード"
+    if head[:1] == ["ご利用カード"]:
+        return "イオンカード"
+    if head and head[0] in _BANK_HEADERS:
+        return _BANK_HEADERS[head[0]]
+    if head[:1] == ["日付"] and "出金金額(円)" in head:
+        return _BANK_HEADERS["取扱日付"]
+    # 三井住友カードは見出しが無い。1行目がいきなり明細で13列。
+    if rows and len(rows[0]) >= 13 and _date_slash(rows[0][0]):
+        return "三井住友カード"
+    return ""
+
+
+def parse_card_csv(data: bytes | str, *, name: str | None = None) -> dict:
+    """
+    カード明細 CSV を読んで、明細1行ずつの辞書にする。**通信しない。**
+
+    Cowork(クラウド)で動いていて Supabase に届かないときでも、これは動く。
+    読み取った行を handoff() に渡せば inbox 用の JSON になり、記録が失われない。
+
+        from db import parse_card_csv, handoff
+        parsed = parse_card_csv(open(path, "rb").read(), name=path)
+        h = handoff(*[("import_card_row", r) for r in parsed["行"]])
+
+    返り値の "行" は {date, amount, merchant_raw, merchant_norm, source, memo}。
+    **費目は入っていない。**辞書を引くには接続が要るため、費目を決めるのは
+    取り込む側(import_card_csv、または inbox を適用するスクリプト)。
+    """
+    text, encoding = _decode_csv(data)
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    fmt = _detect_card_format(rows)
+
+    if fmt in _BANK_HEADERS.values():
+        raise JisuiError(
+            f"これはカード明細ではなく{fmt}です: {name or '(名前なし)'}\n"
+            "口座明細は【わざと扱っていません】。カード代金の引落が入っているので、\n"
+            "カード明細と両方入れると同じ買い物を2回数えてしまいます。\n"
+            "口座の残高を記録したいなら balances に、収入なら income に入れてください。"
+        )
+    if not fmt:
+        raise JisuiError(
+            f"どのカード会社の明細か分かりませんでした: {name or '(名前なし)'}\n"
+            f"1行目: {rows[0] if rows else '(空)'}\n"
+            "いま読めるのは 三井住友カード / 楽天カード / イオンカード の3つです。\n"
+            "新しい形を足すときは、実物を開いて列を確かめてから db.py に書くこと"
+            "(推測で書くと、金額の列を1つ間違えただけで家計が丸ごとずれます)。"
+        )
+
+    good, bad = _CARD_PARSERS[fmt](rows)
+    return {
+        "ファイル": name,
+        "形式": fmt,
+        "文字コード": encoding,
+        "読んだ行": len(rows),
+        "行": good,
+        "読めない行": bad,
+    }
 
 
 if __name__ == "__main__":
