@@ -248,6 +248,7 @@ export function HomeScreen() {
             <NavRow href="/spending/investments" title="投資" desc="保有銘柄・監視銘柄" />
             <NavRow href="/recipes" title="レシピ" desc="材料と在庫の突き合わせ" />
             <NavRow href="/recipes/ask" title="AIに相談する" desc="献立を相談して、レシピを登録する" />
+            <NavRow href="/handoff" title="チャットから取り込む" desc="Cowork の結果を貼り付けて記録する" />
             <NavRow href="/help" title="使い方" desc="困ったときはここ" last />
           </ul>
         </section>
