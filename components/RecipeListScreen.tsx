@@ -54,6 +54,14 @@ export function RecipeListScreen() {
     <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title="レシピ"
+        right={
+          <Link
+            href="/recipes/ask"
+            className="flex h-10 items-center rounded-xl bg-emerald-600 px-3 text-xs font-bold text-white"
+          >
+            AIに相談
+          </Link>
+        }
         subtitle={
           <>
             {rows.length}

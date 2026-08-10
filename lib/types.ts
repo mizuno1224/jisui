@@ -415,3 +415,35 @@ export type Todo = {
   repeat_until: string | null;
   sort_order: number;
 };
+
+// ------------------------------------------------ 献立を考えるときの前提
+
+/** 調理器具。01_schema.sql の equipment に対応する。 */
+export type Equipment = {
+  id: number;
+  household_id: string;
+  name: string;
+  memo: string | null;
+};
+
+/** 常備品。ここにあるものは買い物リストに載せない決まり。 */
+export type Pantry = {
+  id: number;
+  household_id: string;
+  name: string;
+  category: string | null;
+  stock: "ある" | "切れそう" | "切れた";
+  /** お決まり食材(毎回チェックする定番) */
+  staple: boolean;
+  memo: string | null;
+};
+
+/** 好み・方針。kind が「苦手」のものは絶対に使わない。 */
+export type Preference = {
+  id: number;
+  household_id: string;
+  kind: "苦手" | "好き" | "方針";
+  item: string;
+  memo: string | null;
+  added_at: string;
+};

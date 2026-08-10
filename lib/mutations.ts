@@ -699,3 +699,95 @@ function nextDue(due: string, repeat: string): string | null {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+
+// ------------------------------------------------------------ レシピ
+
+/**
+ * レシピを保存する。
+ *
+ * 【なぜアプリから作れる必要があるのか】
+ * これまでレシピはチャット(Cowork)からしか作れなかった。
+ * ところがチャットはクラウドで動くと Supabase に届かず、パソコンも要る。
+ * スマホしか手元に無いときに献立を思いついても、記録する先が無かった。
+ *
+ * スマホの Claude アプリに相談して、返ってきた本文をそのまま貼れるようにする。
+ * これで追加の課金なしに、スマホだけで「相談する → 記録する」が閉じる。
+ */
+export async function saveRecipe(input: {
+  id?: number;
+  name: string;
+  category?: string | null;
+  protein?: string | null;
+  timeMin?: number | null;
+  freezable?: boolean;
+  freezeNotes?: string | null;
+  /** 手順の本文(Markdown)。レシピ画面がそのまま表示する */
+  cardMd?: string | null;
+  source?: string | null;
+  tags?: string | null;
+}) {
+  const supabase = requireClient();
+  const row = {
+    household_id: getSession().householdId,
+    name: input.name,
+    category: input.category ?? null,
+    protein: input.protein ?? null,
+    time_min: input.timeMin ?? null,
+    freezable: input.freezable ?? false,
+    freeze_notes: input.freezeNotes ?? null,
+    card_md: input.cardMd ?? null,
+    source: input.source ?? null,
+    tags: input.tags ?? null,
+  };
+  const query = input.id
+    ? supabase.from("recipes").update(row).eq("id", input.id).select("id")
+    : supabase.from("recipes").insert(row).select("id");
+  const { data, error } = await query.abortSignal(signal());
+  if (error) throw error;
+  invalidate("recipes");
+  return (data?.[0]?.id as number | undefined) ?? input.id ?? null;
+}
+
+export async function deleteRecipe(id: number) {
+  const supabase = requireClient();
+  // 材料は on delete cascade で一緒に消える(01_schema.sql)
+  const { error } = await supabase.from("recipes").delete().eq("id", id).abortSignal(signal());
+  if (error) throw error;
+  invalidate("recipes");
+  invalidate("recipe_ingredients");
+}
+
+/**
+ * レシピの材料をまとめて入れ替える。
+ *
+ * 1件ずつ足し引きせず、そのレシピのぶんを全部消してから入れ直す。
+ * 貼り直すたびに古い材料が残るほうが厄介なため。
+ * この表には household_id が無い(世帯はレシピ経由で判定される)。
+ */
+export async function replaceRecipeIngredients(
+  recipeId: number,
+  items: { name: string; qty?: number | null; unit?: string | null; optional?: boolean }[],
+) {
+  const supabase = requireClient();
+  const del = await supabase
+    .from("recipe_ingredients")
+    .delete()
+    .eq("recipe_id", recipeId)
+    .abortSignal(signal());
+  if (del.error) throw del.error;
+  if (items.length === 0) return;
+  const { error } = await supabase
+    .from("recipe_ingredients")
+    .insert(
+      items.map((i) => ({
+        recipe_id: recipeId,
+        name: i.name,
+        qty: i.qty ?? null,
+        unit: i.unit ?? null,
+        optional: i.optional ?? false,
+      })),
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("recipe_ingredients");
+}
