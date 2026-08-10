@@ -18,14 +18,18 @@ import type { CalendarEvent, CalendarTag, EventComment, Recipe } from "@/lib/typ
 
 type Mode = "予定" | "献立";
 
-/** 通知の選択肢。分で持つ。null = 通知しない。 */
-const NOTIFY_CHOICES: { label: string; min: number | null }[] = [
-  { label: "なし", min: null },
-  { label: "10分前", min: 10 },
-  { label: "30分前", min: 30 },
-  { label: "1時間前", min: 60 },
-  { label: "前日", min: 1440 },
-];
+/*
+ * 【通知の欄は置かない】
+ *
+ * 「何分前に知らせる」を選べる欄を一度作ったが、鳴らす仕組みが無かった。
+ * PWA は閉じている間に決まった時刻で音を出す手段を持たない。
+ * 本当に鳴らすにはサーバから Web Push を送る仕組みが要り、
+ * 今回はそこまでやらないと決めた。
+ *
+ * 選べるのに何も起きない欄は、鳴ると信じて出かける準備をしない人を作る。
+ * 歯医者を忘れるより、最初から無いほうがよい。
+ * データベースの notify_min 列は残してある(あとで作るときのため)。
+ */
 
 /** created_at は UTC で返る。そのまま切り出すと9時間ずれる。 */
 function localTime(iso: string): string {
@@ -66,11 +70,10 @@ export function EventSheet({
   const [place, setPlace] = useState(existing?.location ?? "");
   const [url, setUrl] = useState(existing?.url ?? "");
   const [items, setItems] = useState(existing?.items ?? "");
-  const [notifyMin, setNotifyMin] = useState<number | null>(existing?.notify_min ?? null);
   // 場所・持ち物・URL・通知は毎回は使わない。
   // 既に何か入っているときだけ開いた状態で出す。
   const [showDetail, setShowDetail] = useState(
-    Boolean(existing?.location || existing?.url || existing?.items || existing?.notify_min),
+    Boolean(existing?.location || existing?.url || existing?.items),
   );
   const [repeat, setRepeat] = useState<string>(existing?.repeat ?? "なし");
   const [repeatUntil, setRepeatUntil] = useState(existing?.repeat_until ?? "");
@@ -117,7 +120,6 @@ export function EventSheet({
           location: place.trim() || null,
           url: url.trim() || null,
           items: items.trim() || null,
-          notifyMin,
           repeat,
           repeatUntil: repeat === "なし" ? null : repeatUntil || null,
         });
@@ -339,7 +341,7 @@ export function EventSheet({
               onClick={() => setShowDetail(true)}
               className="mt-3 h-11 w-full rounded-xl bg-neutral-100 text-sm font-semibold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
             >
-              ＋ 場所・持ち物・URL・通知
+              ＋ 場所・持ち物・URL
             </button>
           ) : (
             <>
@@ -373,28 +375,6 @@ export function EventSheet({
                 className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
               />
 
-              <label className="mt-3 block text-xs font-medium text-neutral-500">通知</label>
-              <div className="mt-1 grid grid-cols-5 gap-1">
-                {NOTIFY_CHOICES.map((n) => (
-                  <button
-                    key={n.label}
-                    type="button"
-                    onClick={() => setNotifyMin(n.min)}
-                    className={`h-11 rounded-lg text-[11px] font-bold ${
-                      notifyMin === n.min
-                        ? "bg-emerald-600 text-white"
-                        : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
-                    }`}
-                  >
-                    {n.label}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
-                <strong>いまは記録するだけで、まだ鳴りません。</strong>
-                ホーム画面の「今日の予定」に出るので、そこで気づく形です。
-                絶対に忘れたくない用事は、端末のアラームも併せて使ってください。
-              </p>
             </>
           )}
         </>

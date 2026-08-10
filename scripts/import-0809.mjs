@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DB = String.raw`C:\Users\mmizu\jisui\jisui.db`;
+const DB = String.raw`C:\Users\mmizu\jisui\_引退_2026-08-10\jisui.db`;
 const JISUI = String.raw`C:\Users\mmizu\jisui`; // card_path はここからの相対パス
 const HOUSEHOLD = "00000000-0000-4000-8000-000000000001";
 
@@ -225,21 +225,19 @@ for (const r of srcRecipes) {
 // ---------------------------------------------------------------- 在庫
 const onion = srcOnion[0];
 add(
-  `在庫「玉ねぎ」の置き場所を 常温 → ${onion.location} に直す`,
+  "在庫「玉ねぎ」には触らない",
   [
-    `SQLite の ${onion.updated_at}(UTC)の書き込みが最新。Supabase 側は移行時のまま常温になっている。`,
-    "本当の置き場所は野菜室だが、01_schema.sql:59-60 の check が 冷蔵/冷凍/常温 しか通さないので今は入れられない。",
-    "  区画を増やすのはこのスクリプトの仕事ではない(schema と lib/types.ts:40 の両方を直す別作業)。",
-    "  常温よりは冷蔵のほうが実物に近いので、SQLite の値をそのまま入れる。",
-    `updated_at が ${onion.updated_at} より新しければ触らない。8/9 より後にアプリで直していたら、そちらを尊重する。`,
-    "たまご(Supabase 9個 / SQLite 10個)には触らない。減ったという新しい記録は Supabase 側にしか無い。",
+    `SQLite では ${onion.location} になっている(8/9 の書き込み)。`,
+    "しかしこれは冷蔵庫の区画が【3つしか無かった頃の妥協】だった。",
+    "  当時のコメントにも「本当の置き場所は野菜室だが check が通さない」と書いてある。",
+    "  常温よりは冷蔵のほうがまし、という理由で選ばれた値で、正しい場所ではない。",
+    "区画を5つに増やした 12a/12b のあと、玉ねぎの正しい場所は【常温】。",
+    "  取扱説明書どおり、玉ねぎ・いも類・かぼちゃは冷暗所で保存する。",
+    "  Supabase 側は既に常温になっているので、直す必要が無い。",
+    "ここで SQLite の値を入れると、正しい常温を誤った冷蔵で上書きすることになる。",
+    "たまご(Supabase 9個 / SQLite 10個)にも触らない。減ったという新しい記録は Supabase 側にしか無い。",
   ],
-  [
-    `update inventory set location = ${q(onion.location)}, updated_at = ${ts(onion.updated_at)}\n` +
-      `where household_id = '${HOUSEHOLD}' and name = ${q(onion.name)}\n` +
-      `  and location is distinct from ${q(onion.location)}\n` +
-      `  and updated_at < ${ts(onion.updated_at)};`,
-  ],
+  [],
 );
 
 // ---------------------------------------------------------------- 献立
@@ -387,7 +385,7 @@ if (!APPLY) {
   lines.push("・8/7 の献立(外食=実施)。Supabase 側のほうが新しい");
   lines.push("・在庫のたまご(Supabase 9個 / SQLite 10個)。減った記録は Supabase にしかない");
   lines.push("・cook_log。8/9 時点で SQLite・Supabase とも 8/6 の1件だけで同じ");
-  lines.push("・01_schema.sql と lib/types.ts。玉ねぎを野菜室にするには別途この2つを直す必要がある");
+  lines.push("・冷蔵庫の区画は 12a/12b で5つに増やし済み。玉ねぎは常温が正しいので触らない");
   lines.push("");
   lines.push("------------------------------------------------------------");
   lines.push("実際に流すには");
@@ -451,7 +449,7 @@ say(
     `    and date between '${FROM}' and '${TO}') as 献立, ${srcMeals.length} as 元の献立,`,
 );
 say(
-  `  (select location from inventory where household_id = '${HOUSEHOLD}' and name = ${q(onion.name)}) as 玉ねぎの場所, ${q(onion.location)} as 元の場所;`,
+  `  (select location from inventory where household_id = '${HOUSEHOLD}' and name = ${q(onion.name)}) as 玉ねぎの場所, '常温' as 期待;`,
 );
 say(``);
 say(`-- 検算2: 移行後の献立。右のコメントと1行ずつ見比べる。`);
