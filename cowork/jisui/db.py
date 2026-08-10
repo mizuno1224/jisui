@@ -640,8 +640,26 @@ class Jisui:
         return _request("GET", f"{self.url}/rest/v1/{table}?{query}", self._headers()) or []
 
     def insert(self, table: str, rows: list[dict]) -> list[dict]:
-        """household_id は自動で補う。付け忘れると RLS に弾かれるため。"""
-        payload = [{"household_id": self.household_id, **row} for row in rows]
+        """
+        household_id は自動で補う。付け忘れると RLS に弾かれるため。
+
+        【全部の行で列をそろえる】
+        PostgREST は一括挿入のとき「全ての行が同じ列を持つこと」を求める。
+        1行目にあって2行目に無い列があると
+        400 PGRST102 "All object keys must match" で【1行も入らない】。
+        レシピのように、任意の欄(freeze_notes など)を持つ行と持たない行が
+        混ざるのは普通なので、ここでそろえる。足りないぶんは null。
+        実際にこれでレシピ2件の登録が丸ごと落ちた。
+        """
+        keys: list[str] = []
+        for row in rows:
+            for k in row:
+                if k not in keys:
+                    keys.append(k)
+        payload = [
+            {"household_id": self.household_id, **{k: row.get(k) for k in keys}}
+            for row in rows
+        ]
         # household_id は入れずに残す。適用するのは別の人・別の世帯かもしれないので、
         # 受け渡し JSON には「何を入れたいか」だけを書き、世帯は適用側が付ける。
         with _capturing(("insert", {"table": table, "rows": rows})):

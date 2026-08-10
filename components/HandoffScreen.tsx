@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import {
@@ -23,7 +24,18 @@ import {
  * アプリはスマホからでも Supabase に届くので、これでパソコンが要らなくなる。
  */
 export function HandoffScreen() {
-  const [text, setText] = useState("");
+  const params = useSearchParams();
+  /*
+   * URL に ?d=… が付いていたら、それを最初の中身にする。
+   *
+   * iPhone の「ショートカット」から、コピーした JSON を
+   * このアドレスに付けて開けば、貼る操作が要らなくなる。
+   * 長い文字列を載せるので base64 にしてある。
+   *
+   * 効果の中で setState せず、最初の値として渡す。
+   * 効果で入れると、描画のあとにもう一度描画が走る。
+   */
+  const [text, setText] = useState(() => decodeParam(params.get("d")));
   const [busy, setBusy] = useState(false);
   const [dupKeys, setDupKeys] = useState<string[]>([]);
   const [result, setResult] = useState<{
@@ -100,6 +112,26 @@ export function HandoffScreen() {
         </section>
 
         <section className="rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard
+                .readText()
+                .then((t) => setText(t))
+                .catch(() =>
+                  setText((v) =>
+                    v === "" ? "" : v,
+                  ),
+                );
+            }}
+            className="mb-3 h-14 w-full rounded-xl bg-emerald-600 text-base font-bold text-white active:bg-emerald-700"
+          >
+            クリップボードから貼る
+          </button>
+          <p className="mb-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+            うまくいかないときは、下の欄を長押しして「ペースト」を選んでください。
+          </p>
+
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -213,4 +245,14 @@ export function HandoffScreen() {
       </div>
     </main>
   );
+}
+
+/** ?d= の中身を読む。base64 でも素のままでも受ける。読めなければ空。 */
+function decodeParam(d: string | null): string {
+  if (!d) return "";
+  try {
+    return decodeURIComponent(escape(atob(d)));
+  } catch {
+    return d;
+  }
 }

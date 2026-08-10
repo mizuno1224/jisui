@@ -321,9 +321,21 @@ async function applyOne(r: HandoffRecord, householdId: string, supabase: Client)
             `受け付けるのは ${INSERTABLE.join(" / ")} です。`,
         );
       }
+      /*
+       * 【全部の行で列をそろえてから送る】
+       * PostgREST は一括挿入のとき、全ての行が同じ列を持つことを求める。
+       * 1行目にあって2行目に無い列があると
+       * 400 PGRST102 "All object keys must match" で【1行も入らない】。
+       * レシピのように任意の欄がある表では普通に起きる。実際に落ちた。
+       */
+      const keys: string[] = [];
+      for (const row of rows) for (const k of Object.keys(row)) if (!keys.includes(k)) keys.push(k);
+      const even = rows.map((row) =>
+        Object.fromEntries(keys.map((k) => [k, row[k] ?? null])),
+      );
       // recipe_ingredients には household_id が無い(世帯はレシピ経由で判定される)
       const withHousehold =
-        table === "recipe_ingredients" ? rows : rows.map((x) => ({ ...x, household_id: householdId }));
+        table === "recipe_ingredients" ? even : even.map((x) => ({ ...x, household_id: householdId }));
       const ins = await supabase.from(table).insert(withHousehold);
       if (ins.error) throw ins.error;
       return;
