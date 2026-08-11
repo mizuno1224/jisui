@@ -29,7 +29,6 @@ from __future__ import annotations
 import base64
 import contextlib
 import csv
-import glob
 import hashlib
 import io
 import json
@@ -152,130 +151,104 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-11.2"
+SKILL_VERSION = "2026-08-11.3"
 
 
 # つながらないときの受け渡し場所。
 #
-# 【Windows のパスを、そのままエージェントに渡してはいけない】
-# Cowork のサンドボックスから見ると、つないだフォルダは
-#   /sessions/<セッションID>/mnt/<フォルダ名>/…
-# という Linux のパスに見える。C:\Users\… という道はサンドボックスに存在しない。
+# 【ここは Windows のパスで正しい】(2026-08-11 に実測で確定)
+# Cowork はクラウドのコンテナで動いていて、パソコンのフォルダは
+# ファイルシステムには見えない。/sessions も存在しない(実測: ls → No such
+# file or directory、glob.glob("/sessions/*") → [])。
+# 触れるのは remote-devices の道具(device_list_dir / device_commit_files)
+# だけで、**その道具は Windows のパスをそのまま受け取る。**
+#   実測: device_commit_files → {"written":["C:\\Users\\mmizu\\家計簿\\inbox\\…"]}
+#         → パソコン側に実在。main.log に committed 1 files, 0 rejected
 #
-# それでも一度は動いていた。エージェントが「家計簿 がつながっている」と察して
-# /sessions/…/mnt/家計簿/inbox へ翻訳してくれていたからで、偶然に近い。
-# 行き先を jisui に変えた瞬間に翻訳先が消え、エージェントは自分の作業領域に
-# 書いて「置きました」と報告した。パソコンには1件も届いていない
-# (main.log の [remote-file] が 15:30:18 を最後に一度も出ていないことで確認)。
+# だから db.py は、この Windows のパスを素直に伝えればよい。
+# 一度これを「サンドボックス内の Linux のパスを探す」作りに変えたが、
+# 見えないものを探すので何も見つからず、動いていた経路を壊した。取り消した。
 #
-# そこで、置き場所は【定数ではなく、実際に在るものを探して決める】。
-# 探し方は inbox_dir() を見ること。
-INBOX_DIR_WINDOWS = r"C:\Users\mmizu\jisui\inbox"
+# 【本当の落とし穴はパスではなかった】
+# 事故の正体は、エージェントが【置いていないのに「置きました」と報告した】こと。
+# 16時前後に「inbox に2件置いた」と言われたが、main.log の [remote-file] は
+# 15:30:18 を最後に1行も出ていなかった(接続の生存確認は34件出ていて、
+# 回線は生きていた)。書き込みを依頼した形跡そのものが無い。
+# 防ぎ方は場所を変えることではなく、【置いたあと必ず一覧して確かめさせる】こと。
+INBOX_DIR = r"C:\Users\mmizu\jisui\inbox"
 
-# 後方互換。古い呼び出しが残っていても壊れないようにしておく。
-# 新しく書くコードは inbox_dir() を使うこと。
-INBOX_DIR = INBOX_DIR_WINDOWS
-
-
-def _join(base: str, *parts: str) -> str:
-    """
-    パスをつなぐ。**区切り文字は base の流儀に合わせる。**
-
-    os.path.join は動いている OS の流儀で区切る。サンドボックスは Linux なので
-    ふだんは問題にならないが、Windows 側で /sessions/… を組み立てる場面
-    (試験や、両方の道を並べて見せるとき)に \\ が混ざって読みにくくなる。
-    人が読んで貼るパスなので、見た目が崩れないようにしておく。
-    """
-    if base.startswith("/"):
-        return "/".join([base.rstrip("/"), *parts])
-    return os.path.join(base, *parts)
+# 別名。読む側が「Windows のパスである」と分かるように残す。
+INBOX_DIR_WINDOWS = INBOX_DIR
 
 
 def inbox_dir() -> str:
     """
-    いまこのプロセスから【実際に書ける】受け渡し場所を返す。見つからなければ "" 。
+    受け渡し場所を返す。**パソコン側の Windows のパス。**
 
-    3通りの居場所を想定している。
+    Cowork から呼んでも、パソコンで呼んでも、同じ答えでよい。
+    Cowork はこのパスを remote-devices の道具にそのまま渡せば書ける。
+    パソコンの上ならそのまま開ける。
 
-      1. このパソコンの上で動いている(Claude Code、あるいは「Run this task」で
-         パソコン側を選んだ Cowork)。Windows のパスがそのまま在る。
-      2. Cowork のクラウドのサンドボックス。つないだフォルダが
-         /sessions/<ID>/mnt/<フォルダ名>/ に見えている。
-      3. どちらでもない。フォルダをつないでいない。
-
-    3 の場合に "" を返すのが大事なところ。ここで適当な場所を返すと、
-    エージェントは自分の作業領域に書いて「置きました」と言う。
-    その報告は嘘ではないが、パソコンには何も届かない。実際にそうなった。
+    【ここで場所を探そうとしないこと】
+    db.py はクラウドのコンテナにいるので、パソコンのフォルダを見に行けない。
+    「在るかどうか」を確かめようとすると必ず「無い」と答えることになり、
+    書けるのに「書けません」と言い出す。実際にその作りにして壊した。
+    在ることを確かめるのは、道具を持っているエージェントの仕事。
     """
-    if os.path.isdir(INBOX_DIR_WINDOWS):
-        return INBOX_DIR_WINDOWS
-
-    # つないだフォルダの中の inbox を探す。
-    # フォルダ名は 家計簿 でも jisui でも構わない。名前で決め打ちしない。
-    # 決め打ちにすると、つなぎ替えたとたんに今回と同じ事故になる。
-    mounts = sorted(glob.glob("/sessions/*/mnt/*"))
-    for base in mounts:
-        cand = _join(base, "inbox")
-        if os.path.isdir(cand):
-            return cand
-
-    # inbox はまだ無いが、つないだフォルダはある。作れるので、そこを返す。
-    for base in mounts:
-        if os.path.isdir(base):
-            return _join(base, "inbox")
-
-    return ""
+    return INBOX_DIR
 
 
-def resolve_local_file(path: str) -> str:
+def read_local_file(path: str) -> bytes:
     """
-    人が言った場所を、いまのプロセスから実際に開ける場所に読み替える。
+    パソコンの上のファイルを読む。**Cowork からは読めないので、その旨を返す。**
 
     人は「C:\\Users\\mmizu\\jisui\\inbox\\meisai202608.csv に置いた」と言う。
-    パソコンの上ならそのまま開けるが、Cowork のサンドボックスからは
-    その道が無く、同じファイルが /sessions/<ID>/mnt/jisui/inbox/meisai202608.csv
-    に見えている。ここで読み替えないと「ファイルがありません」で止まる。
-
-    見つからなければ、元のパスをそのまま返す(呼び出し側が
-    FileNotFoundError で失敗し、何が無いのかが分かるほうがよい)。
+    パソコンで動いていればそのまま開ける。
+    Cowork(クラウド)からは開けない。ファイルシステムが別物だから。
+    そこで黙って FileNotFoundError にせず、**どうすれば読めるか**を返す。
     """
     if os.path.exists(path):
-        return path
-
-    # Windows 風のパスも Linux 風のパスも、ファイル名だけ取り出して探す。
-    name = path.replace("\\", "/").rstrip("/").split("/")[-1]
-    if not name:
-        return path
-
-    seen: list[str] = []
-    here = inbox_dir()
-    if here:
-        seen.append(here)
-    for base in sorted(glob.glob("/sessions/*/mnt/*")):
-        seen.append(base)
-        seen.append(_join(base, "inbox"))
-
-    for d in seen:
-        cand = _join(d, name)
-        if os.path.exists(cand):
-            return cand
-    return path
+        return Path(path).read_bytes()
+    raise JisuiError(
+        f"このプロセスからは開けません: {path}\n"
+        "\n"
+        "【Cowork(クラウド)から呼んでいる場合】\n"
+        "パソコンのファイルは、あなたの remote-devices の道具でしか読めません。\n"
+        "  1. その道具でファイルの中身を読む\n"
+        "  2. 読んだ中身を data= に渡してもう一度呼ぶ\n"
+        "     例: j.import_card_csv(data=<読み取った中身>)\n"
+        "path= は、パソコン上で動いているときだけ使えます。\n"
+        "\n"
+        "【パソコン上で呼んでいる場合】\n"
+        "そのパスにファイルがありません。置き場所と名前を確かめてください。"
+    )
 
 
 def inbox_status() -> dict:
-    """受け渡し場所の状況。困ったときに人が読むためのもの。"""
-    mounts = sorted(glob.glob("/sessions/*/mnt/*"))
-    here = inbox_dir()
+    """
+    受け渡し場所と、確かめ方。困ったときに人とエージェントが読むためのもの。
+
+    【状態を「調べて」返さないこと】
+    db.py はクラウドのコンテナにいて、パソコンのフォルダを見に行けない。
+    ここで os.path.isdir を呼んでも必ず False になり、「無い」と嘘をつく。
+    確かめるのは道具を持っているエージェントの仕事なので、その手順を返す。
+    """
+    on_pc = os.path.isdir(INBOX_DIR)
     return {
-        "書ける場所": here or None,
-        "そこは既にあるか": bool(here) and os.path.isdir(here),
-        "つないでいるフォルダ": [os.path.basename(m) for m in mounts] or [],
-        "パソコン側のパス": INBOX_DIR_WINDOWS,
-        "困ったときは": (
-            "「つないでいるフォルダ」が空なら、デスクトップアプリでフォルダを"
-            "つないでいない。C:\\Users\\mmizu\\jisui をつなぐこと。"
-            if not mounts else
-            "書いたあとに必ず一覧して、ファイルが在ることを目で確かめること。"
+        "受け渡し場所": INBOX_DIR,
+        "いまどこで動いているか": (
+            "パソコンの上(そのまま読み書きできる)" if on_pc
+            else "パソコン以外(Cowork のクラウドなど)。道具ごしにだけ書ける"
+        ),
+        "確かめ方": [
+            f"1. device_list_dir で {INBOX_DIR} を一覧する",
+            "2. 置いたファイルが在ることを目で見る",
+            "3. 見てから「置きました」と言う。見る前に言わないこと",
+        ],
+        "なぜ確かめるか": (
+            "置いていないのに「置きました」と報告された事故が実際にあった。"
+            "パソコン側のログには書き込みを依頼した形跡すら無かった。"
+            "一覧して在ることを見るまでは、置けたと言わないこと。"
         ),
     }
 
@@ -402,41 +375,29 @@ def handoff(*ops: Any, note: str | None = None) -> dict:
     digest = hashlib.sha256("".join(r["key"] for r in records).encode("utf-8")).hexdigest()[:8]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     name = f"handoff-{stamp}-{len(records)}-{digest}.json"
-    where = inbox_dir()
-    out = {
+    full = os.path.join(INBOX_DIR, name)
+    return {
         "ファイル名": name,
         "中身": json.dumps(payload, ensure_ascii=False, indent=2),
         "件数": len(records),
-        # 【実際に書ける場所】。Windows のパスではない。
-        # サンドボックスからは /sessions/<ID>/mnt/<フォルダ名>/inbox に見える。
-        "保存先": where or None,
-        "保存先のフルパス": _join(where, name) if where else None,
+        # 【Windows のパスでよい】。remote-devices の道具はこれをそのまま受け取る。
+        "保存先": INBOX_DIR,
+        "保存先のフルパス": full,
+        # 【置いたあと必ず確かめさせる】
+        # 事故の正体は場所ではなく報告だった。置いていないのに「置きました」と
+        # 言われ、パソコン側のログには書き込みを依頼した形跡すら無かった。
+        # 一覧して在ることを見るまでは、置けたと言わせない。
+        "手順": [
+            f"1. 「中身」を {full} に、そのまま保存する",
+            f"2. 保存したら {INBOX_DIR} を一覧して、そのファイルが在ることを確かめる",
+            "3. 見てから「置きました」と言う。確かめる前に言わないこと",
+            "4. 一覧に出てこなければ置けていない。置けたと言わず、その旨を伝える",
+        ],
+        "やってはいけないこと": (
+            "自分の作業領域(/tmp など)に保存して「置きました」と言わないこと。"
+            "パソコンには届きません。"
+        ),
     }
-    if where:
-        # 【書いたあと必ず確かめさせる】
-        # 「置きました」と言えてしまうのに何も届いていない、という事故を
-        # 一度起こしている。報告の前に、在ることを目で見る。
-        out["手順"] = [
-            f"1. 「中身」を {_join(where, name)} に、そのまま保存する",
-            f"2. 保存したら ls -l {where} を実行して、そのファイルが在ることを確かめる",
-            "3. 確かめられて初めて「置きました」と言う。確かめる前に言わないこと",
-        ]
-    else:
-        # ここで適当な場所を案内しないこと。エージェントは自分の作業領域に
-        # 書いて「置きました」と報告し、パソコンには何も届かない。
-        out["置けない"] = (
-            "つないでいるフォルダが1つも見つかりません。"
-            "この記録は、いまはどこにも保存できません。"
-        )
-        out["やってはいけないこと"] = (
-            "自分の作業領域(/tmp や /home など)に保存して「置きました」と言わないこと。"
-            "パソコンには届きません。置けなかったと正直に伝えること。"
-        )
-        out["人に頼むこと"] = (
-            "デスクトップアプリでこのチャットに C:\\Users\\mmizu\\jisui フォルダを"
-            "つないでもらう。つないだあと、もう一度この操作をやり直せば保存できます。"
-        )
-    return out
 
 
 # いま試みている操作を積んでおく場所。
@@ -714,10 +675,11 @@ class Jisui:
             # 届かなかったときの記録はここに置く。ここがパソコン側の見張りと
             # 食い違っていると、置いても誰も取りに来ない。実際にそうなった。
             # Windows のパスではなく、いま本当に書ける場所を答えること。
-            "受け渡し場所": inbox_dir() or "(つないでいるフォルダが無い。保存できない)",
-            "つないでいるフォルダ": [
-                os.path.basename(m) for m in sorted(glob.glob("/sessions/*/mnt/*"))
-            ] or "(なし。パソコン上で動いているならこれで正常)",
+            "受け渡し場所": INBOX_DIR,
+            # 【ここで「在るか」を調べないこと】
+            # Cowork からはパソコンのフォルダが見えないので、調べると必ず
+            # 「無い」と答える。書けるのに書けないと言い出す。
+            "受け渡し場所の確かめ方": f"device_list_dir で {INBOX_DIR} を一覧する",
         }
 
     def _get_token(self) -> str:
@@ -1845,7 +1807,7 @@ class Jisui:
         if data is None:
             if path is None:
                 raise JisuiError("path か data のどちらかを渡してください。")
-            data = Path(resolve_local_file(path)).read_bytes()
+            data = read_local_file(path)
 
         parsed = parse_card_csv(data, name=str(path) if path else None)
         rows = parsed["行"]
