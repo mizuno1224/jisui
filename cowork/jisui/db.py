@@ -29,6 +29,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import csv
+import glob
 import hashlib
 import io
 import json
@@ -151,14 +152,132 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-11.1"
+SKILL_VERSION = "2026-08-11.2"
 
 
 # つながらないときの受け渡し場所。
-# ここは Cowork(エージェント)が読み書きできる接続済みフォルダで、
-# db.py 自身(サンドボックスの中)からは書けない。だからこの定数は
-# 「エージェントに書いてもらう場所」を伝えるためだけに使う。
-INBOX_DIR = r"C:\Users\mmizu\jisui\inbox"
+#
+# 【Windows のパスを、そのままエージェントに渡してはいけない】
+# Cowork のサンドボックスから見ると、つないだフォルダは
+#   /sessions/<セッションID>/mnt/<フォルダ名>/…
+# という Linux のパスに見える。C:\Users\… という道はサンドボックスに存在しない。
+#
+# それでも一度は動いていた。エージェントが「家計簿 がつながっている」と察して
+# /sessions/…/mnt/家計簿/inbox へ翻訳してくれていたからで、偶然に近い。
+# 行き先を jisui に変えた瞬間に翻訳先が消え、エージェントは自分の作業領域に
+# 書いて「置きました」と報告した。パソコンには1件も届いていない
+# (main.log の [remote-file] が 15:30:18 を最後に一度も出ていないことで確認)。
+#
+# そこで、置き場所は【定数ではなく、実際に在るものを探して決める】。
+# 探し方は inbox_dir() を見ること。
+INBOX_DIR_WINDOWS = r"C:\Users\mmizu\jisui\inbox"
+
+# 後方互換。古い呼び出しが残っていても壊れないようにしておく。
+# 新しく書くコードは inbox_dir() を使うこと。
+INBOX_DIR = INBOX_DIR_WINDOWS
+
+
+def _join(base: str, *parts: str) -> str:
+    """
+    パスをつなぐ。**区切り文字は base の流儀に合わせる。**
+
+    os.path.join は動いている OS の流儀で区切る。サンドボックスは Linux なので
+    ふだんは問題にならないが、Windows 側で /sessions/… を組み立てる場面
+    (試験や、両方の道を並べて見せるとき)に \\ が混ざって読みにくくなる。
+    人が読んで貼るパスなので、見た目が崩れないようにしておく。
+    """
+    if base.startswith("/"):
+        return "/".join([base.rstrip("/"), *parts])
+    return os.path.join(base, *parts)
+
+
+def inbox_dir() -> str:
+    """
+    いまこのプロセスから【実際に書ける】受け渡し場所を返す。見つからなければ "" 。
+
+    3通りの居場所を想定している。
+
+      1. このパソコンの上で動いている(Claude Code、あるいは「Run this task」で
+         パソコン側を選んだ Cowork)。Windows のパスがそのまま在る。
+      2. Cowork のクラウドのサンドボックス。つないだフォルダが
+         /sessions/<ID>/mnt/<フォルダ名>/ に見えている。
+      3. どちらでもない。フォルダをつないでいない。
+
+    3 の場合に "" を返すのが大事なところ。ここで適当な場所を返すと、
+    エージェントは自分の作業領域に書いて「置きました」と言う。
+    その報告は嘘ではないが、パソコンには何も届かない。実際にそうなった。
+    """
+    if os.path.isdir(INBOX_DIR_WINDOWS):
+        return INBOX_DIR_WINDOWS
+
+    # つないだフォルダの中の inbox を探す。
+    # フォルダ名は 家計簿 でも jisui でも構わない。名前で決め打ちしない。
+    # 決め打ちにすると、つなぎ替えたとたんに今回と同じ事故になる。
+    mounts = sorted(glob.glob("/sessions/*/mnt/*"))
+    for base in mounts:
+        cand = _join(base, "inbox")
+        if os.path.isdir(cand):
+            return cand
+
+    # inbox はまだ無いが、つないだフォルダはある。作れるので、そこを返す。
+    for base in mounts:
+        if os.path.isdir(base):
+            return _join(base, "inbox")
+
+    return ""
+
+
+def resolve_local_file(path: str) -> str:
+    """
+    人が言った場所を、いまのプロセスから実際に開ける場所に読み替える。
+
+    人は「C:\\Users\\mmizu\\jisui\\inbox\\meisai202608.csv に置いた」と言う。
+    パソコンの上ならそのまま開けるが、Cowork のサンドボックスからは
+    その道が無く、同じファイルが /sessions/<ID>/mnt/jisui/inbox/meisai202608.csv
+    に見えている。ここで読み替えないと「ファイルがありません」で止まる。
+
+    見つからなければ、元のパスをそのまま返す(呼び出し側が
+    FileNotFoundError で失敗し、何が無いのかが分かるほうがよい)。
+    """
+    if os.path.exists(path):
+        return path
+
+    # Windows 風のパスも Linux 風のパスも、ファイル名だけ取り出して探す。
+    name = path.replace("\\", "/").rstrip("/").split("/")[-1]
+    if not name:
+        return path
+
+    seen: list[str] = []
+    here = inbox_dir()
+    if here:
+        seen.append(here)
+    for base in sorted(glob.glob("/sessions/*/mnt/*")):
+        seen.append(base)
+        seen.append(_join(base, "inbox"))
+
+    for d in seen:
+        cand = _join(d, name)
+        if os.path.exists(cand):
+            return cand
+    return path
+
+
+def inbox_status() -> dict:
+    """受け渡し場所の状況。困ったときに人が読むためのもの。"""
+    mounts = sorted(glob.glob("/sessions/*/mnt/*"))
+    here = inbox_dir()
+    return {
+        "書ける場所": here or None,
+        "そこは既にあるか": bool(here) and os.path.isdir(here),
+        "つないでいるフォルダ": [os.path.basename(m) for m in mounts] or [],
+        "パソコン側のパス": INBOX_DIR_WINDOWS,
+        "困ったときは": (
+            "「つないでいるフォルダ」が空なら、デスクトップアプリでフォルダを"
+            "つないでいない。C:\\Users\\mmizu\\jisui をつなぐこと。"
+            if not mounts else
+            "書いたあとに必ず一覧して、ファイルが在ることを目で確かめること。"
+        ),
+    }
 
 # 受け渡し JSON の目印と版。
 # 次の工程で「この JSON を読んで Supabase に適用するスクリプト」を別の人が書く。
@@ -282,12 +401,42 @@ def handoff(*ops: Any, note: str | None = None) -> dict:
     # ファイル名の末尾は【全レコードの鍵から作る】。中身が同じなら名前も同じ。
     digest = hashlib.sha256("".join(r["key"] for r in records).encode("utf-8")).hexdigest()[:8]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return {
-        "ファイル名": f"handoff-{stamp}-{len(records)}-{digest}.json",
+    name = f"handoff-{stamp}-{len(records)}-{digest}.json"
+    where = inbox_dir()
+    out = {
+        "ファイル名": name,
         "中身": json.dumps(payload, ensure_ascii=False, indent=2),
         "件数": len(records),
-        "保存先": INBOX_DIR,
+        # 【実際に書ける場所】。Windows のパスではない。
+        # サンドボックスからは /sessions/<ID>/mnt/<フォルダ名>/inbox に見える。
+        "保存先": where or None,
+        "保存先のフルパス": _join(where, name) if where else None,
     }
+    if where:
+        # 【書いたあと必ず確かめさせる】
+        # 「置きました」と言えてしまうのに何も届いていない、という事故を
+        # 一度起こしている。報告の前に、在ることを目で見る。
+        out["手順"] = [
+            f"1. 「中身」を {_join(where, name)} に、そのまま保存する",
+            f"2. 保存したら ls -l {where} を実行して、そのファイルが在ることを確かめる",
+            "3. 確かめられて初めて「置きました」と言う。確かめる前に言わないこと",
+        ]
+    else:
+        # ここで適当な場所を案内しないこと。エージェントは自分の作業領域に
+        # 書いて「置きました」と報告し、パソコンには何も届かない。
+        out["置けない"] = (
+            "つないでいるフォルダが1つも見つかりません。"
+            "この記録は、いまはどこにも保存できません。"
+        )
+        out["やってはいけないこと"] = (
+            "自分の作業領域(/tmp や /home など)に保存して「置きました」と言わないこと。"
+            "パソコンには届きません。置けなかったと正直に伝えること。"
+        )
+        out["人に頼むこと"] = (
+            "デスクトップアプリでこのチャットに C:\\Users\\mmizu\\jisui フォルダを"
+            "つないでもらう。つないだあと、もう一度この操作をやり直せば保存できます。"
+        )
+    return out
 
 
 # いま試みている操作を積んでおく場所。
@@ -428,13 +577,32 @@ def _request(method: str, url: str, headers: dict[str, str], body: Any = None) -
         records = _HANDOFF_STACK[0] if _HANDOFF_STACK else []
         hint = ""
         if records:
+            where = inbox_dir()
+            # 【場所は決め打ちにせず、そのとき在るものを案内する】
+            # Windows のパスを書くと、サンドボックスに存在しない道を案内することになる。
+            # エージェントは近そうな場所に書いて「置きました」と言い、
+            # パソコンには何も届かない。実際にそうなった。
+            if where:
+                place = (
+                    f"  {where}\n"
+                    "に保存してください(保存するのはあなたの仕事です。db.py はそのフォルダに書けません)。\n"
+                    f"保存したら ls -l {where} で在ることを確かめてから報告すること。\n"
+                    "確かめる前に「置きました」と言わないこと。"
+                )
+            else:
+                place = (
+                    "ただし、いま保存できる場所がありません。\n"
+                    "つないでいるフォルダが1つも見つかりません(/sessions/*/mnt/* が空)。\n"
+                    "【自分の作業領域に保存して「置きました」と言わないこと。】\n"
+                    "パソコンには届きません。『フォルダがつながっていないので保存できない』と\n"
+                    "正直に伝え、C:\\Users\\mmizu\\jisui をこのチャットにつないでもらってください。"
+                )
             hint = (
                 "\n\n【この内容は失われていません】\n"
                 f"残すべき操作が {len(records)} 件あります。\n"
                 "  h = e.handoff()\n"
-                f"として返ってきた h[\"中身\"] を、h[\"ファイル名\"] という名前で\n"
-                f"  {INBOX_DIR}\n"
-                "に保存してください(保存するのはあなたの仕事です。db.py はそのフォルダに書けません)。\n"
+                "として返ってきた h[\"中身\"] を、h[\"ファイル名\"] という名前で\n"
+                f"{place}\n"
                 "【手元の SQLite には絶対に書かないこと。】書けば “成功” してしまい、\n"
                 "アプリには何も出てこないまま記録が消えます。"
             )
@@ -545,8 +713,11 @@ class Jisui:
             # 【受け渡し場所も答える】
             # 届かなかったときの記録はここに置く。ここがパソコン側の見張りと
             # 食い違っていると、置いても誰も取りに来ない。実際にそうなった。
-            # 場所を移したときは、ここが変わったことを必ず目で確かめる。
-            "受け渡し場所": INBOX_DIR,
+            # Windows のパスではなく、いま本当に書ける場所を答えること。
+            "受け渡し場所": inbox_dir() or "(つないでいるフォルダが無い。保存できない)",
+            "つないでいるフォルダ": [
+                os.path.basename(m) for m in sorted(glob.glob("/sessions/*/mnt/*"))
+            ] or "(なし。パソコン上で動いているならこれで正常)",
         }
 
     def _get_token(self) -> str:
@@ -1674,7 +1845,7 @@ class Jisui:
         if data is None:
             if path is None:
                 raise JisuiError("path か data のどちらかを渡してください。")
-            data = Path(path).read_bytes()
+            data = Path(resolve_local_file(path)).read_bytes()
 
         parsed = parse_card_csv(data, name=str(path) if path else None)
         rows = parsed["行"]
