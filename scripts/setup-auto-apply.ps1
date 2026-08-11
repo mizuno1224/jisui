@@ -50,7 +50,7 @@ $lines = @(
 Set-Content -LiteralPath $vbs -Value $lines -Encoding utf8
 
 Write-Output "入れました: $vbs"
-Write-Output "  見張る場所: $env:USERPROFILE\家計簿\inbox"
+Write-Output "  見張る場所: $env:USERPROFILE\jisui\inbox"
 Write-Output "  ログ      : $log"
 Write-Output ""
 Write-Output "いま動かします..."

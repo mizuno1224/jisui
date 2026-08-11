@@ -35,7 +35,7 @@ j.find_events("歯医者")  # 予定を探す: 題名・メモ・場所・持ち
 j.todo_tree()            # やること: 親子の入れ子で
 ```
 
-**お金の話の前に `C:\\Users\\mmizu\\家計簿\\方針.md` を読む。**
+**お金の話の前に `C:\\Users\\mmizu\\jisui\\方針.md` を読む。**
 住宅ローンの条件、投資方針、そして「どの支出をどのカードで払うか」の
 決めごとが書いてある。DB には入っていないので、読まないと毎回ずれた答えになる。
 
@@ -93,7 +93,7 @@ except JisuiOffline as e:
 ```
 
 `h["中身"]`(JSON の文字列)を、`h["ファイル名"]` という名前で
-**`C:\Users\mmizu\家計簿\inbox\` に保存する。**
+**`C:\Users\mmizu\jisui\inbox\` に保存する。**
 
 **保存するのはあなた(エージェント)の仕事。** `db.py` はサンドボックスの中にいるので
 そのフォルダには書けない。db.py は「何を書けばいいか」を返すところまでをやる。
@@ -338,7 +338,7 @@ j.add_receipt(
 
 ### カード明細の CSV を取り込む
 
-`C:\Users\mmizu\家計簿\inbox\` に置かれた CSV を `transactions` に入れる。
+`C:\Users\mmizu\jisui\inbox\` に置かれた CSV を `transactions` に入れる。
 引退した家計簿スキルにあった機能で、**流儀もそのまま引き継いでいる。**
 
 読めるのは3つ。**実物を開いて列を確かめてある**(推測で足さないこと)。
@@ -354,7 +354,7 @@ j.add_receipt(
 #### 必ず2回に分けて呼ぶ
 
 ```python
-r = j.import_card_csv(r"C:\Users\mmizu\家計簿\inbox\meisai202608.csv")
+r = j.import_card_csv(r"C:\Users\mmizu\jisui\inbox\meisai202608.csv")
 #   ↑ 1回目は【読むだけ】。dry_run=True が既定なので1行も書き込まない
 ```
 
@@ -616,7 +616,7 @@ j.insert("balances",[{"account_id": 1, "year_month": "2026-08", "amount": 120000
 - **`kakeibo.db` と `jisui.db` には書き込まない。** どちらも引退済み。
   両方に書くと必ず食い違う
 - **つながらないときに SQLite へ逃げない。**新しく作るのも駄目。
-  行き先は `C:\Users\mmizu\家計簿\inbox\` の JSON だけ(「つながらないときの受け渡し」)
+  行き先は `C:\Users\mmizu\jisui\inbox\` の JSON だけ(「つながらないときの受け渡し」)
 - **費目を推測で付けない。**分類辞書(`expense_rules`)に無い店は「初見」として
   本人に確かめる。**承認なしに `add_rule` を呼ばない**
 - **相手の非公開予定を回り込んで読もうとしない。** 見えないのは仕様。

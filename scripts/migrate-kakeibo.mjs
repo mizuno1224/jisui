@@ -12,7 +12,7 @@
  */
 import { execFileSync } from "node:child_process";
 
-const DB = String.raw`C:\Users\mmizu\家計簿\kakeibo.db`;
+const DB = String.raw`C:\Users\mmizu\jisui\_引退\家計簿\kakeibo.db`;
 const HOUSEHOLD = "00000000-0000-4000-8000-000000000001";
 
 /**

@@ -13,7 +13,7 @@
  *
  * そこで cowork/jisui/db.py は、届かなかったときに例外を投げて終わりにせず、
  * 「何を書けば復旧できるか」を JSON にして返す(db.py:174-210 の JisuiOffline)。
- * チャットはそれを C:\Users\mmizu\家計簿\inbox\ に置く。そこだけは
+ * チャットはそれを C:\Users\mmizu\jisui\inbox\ に置く。そこだけは
  * チャットからファイルとして読み書きできるため。
  *
  * このスクリプトは、その JSON を【つながる場所=このパソコン】で流し込む係。
@@ -76,7 +76,7 @@ const SKILL_DIR = resolve(HERE, "..", "cowork", "jisui");
 
 // 受け渡し場所の既定値。db.py:161 の INBOX_DIR と同じ値を書いてある。
 // 【食い違ったら黙って別の場所を見ないよう、起動時に db.py の値と突き合わせる】。
-const DEFAULT_INBOX = String.raw`C:\Users\mmizu\家計簿\inbox`;
+const DEFAULT_INBOX = String.raw`C:\Users\mmizu\jisui\inbox`;
 
 const LEDGER_KIND = "jisui-inbox-ledger";
 const LEDGER_VERSION = 1;

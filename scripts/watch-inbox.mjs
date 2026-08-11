@@ -37,7 +37,34 @@ import { homedir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..");
-const INBOX = join(homedir(), "家計簿", "inbox");
+/*
+ * 見張る場所。
+ *
+ * 【新旧どちらも見る】
+ * 受け渡し場所を 家計簿\inbox から jisui\inbox へ移した(2026-08-11)。
+ * Cowork の接続先を変え忘れると、古いほうに置かれて誰も見ないことになる。
+ * 記録がどこにも届かない事故は一度起こしているので、両方を見張る。
+ * 古いほうに何も来なくなったら、そのとき初めて外す。
+ */
+const INBOXES = [
+  join(homedir(), "jisui", "inbox"),
+  join(homedir(), "家計簿", "inbox"),
+].filter((p, i) => i === 0 || existsSync(p));
+const INBOX = INBOXES[0];
+
+/*
+ * 取り込み済みの控えと、済んだファイルの置き場所。
+ *
+ * 【必ず本家のぶんを使う】
+ * apply-inbox.mjs は、渡された inbox の隣に processed/ と applied-keys.json を作る。
+ * 試すときに本番の控えを汚さないための作りで、それ自体は正しい。
+ * だが古い inbox から取り込むとき、そのままだと控えが古い場所に別に作られる。
+ * 控えが 2 つに分かれると、同じ記録が二重に入る。
+ * どの場所から取り込んでも、控えは 1 つでなければならない。
+ */
+const HOME_DIR = dirname(INBOX);
+const PROCESSED = join(HOME_DIR, "processed");
+const LEDGER = join(HOME_DIR, "applied-keys.json");
 const LOG = join(homedir(), "jisui-auto-apply.log");
 const LOCK = join(homedir(), ".jisui-watch.lock");
 
@@ -100,8 +127,12 @@ let timer = null;
 
 /** いま取り込むべきファイルがあるか。.error や説明用の .txt は数えない。 */
 function pending() {
-  if (!existsSync(INBOX)) return 0;
-  return readdirSync(INBOX).filter((f) => f.endsWith(".json")).length;
+  let n = 0;
+  for (const dir of INBOXES) {
+    if (!existsSync(dir)) continue;
+    n += readdirSync(dir).filter((f) => f.endsWith(".json")).length;
+  }
+  return n;
 }
 
 function apply(why) {
@@ -114,10 +145,16 @@ function apply(why) {
   running = true;
   log(`取り込みます(${why})`);
 
-  const child = spawn(process.execPath, [join(REPO, "scripts", "apply-inbox.mjs"), "--apply"], {
-    cwd: REPO,
-    windowsHide: true,
-  });
+  // 記録が置かれている場所を探して、そこから取り込む。
+  // 控えと processed/ は、どこから取り込んでも本家のぶんを使う(上の注記のとおり)。
+  const dir = INBOXES.find(
+    (d) => existsSync(d) && readdirSync(d).some((f) => f.endsWith(".json")),
+  );
+  const args = [join(REPO, "scripts", "apply-inbox.mjs"), "--apply"];
+  if (dir && dir !== INBOX) {
+    args.push(`--inbox=${dir}`, `--processed=${PROCESSED}`, `--ledger=${LEDGER}`);
+  }
+  const child = spawn(process.execPath, args, { cwd: REPO, windowsHide: true });
 
   let out = "";
   child.stdout.on("data", (b) => (out += b.toString("utf8")));
@@ -160,17 +197,20 @@ if (!existsSync(INBOX)) {
   log(`inbox が無かったので作りました: ${INBOX}`);
 }
 
-log(`見張りを始めます: ${INBOX}`);
+log(`見張りを始めます: ${INBOXES.join(" と ")}`);
 log("チャットがここに記録を置くと、数秒でアプリに反映されます。");
 
 // 起動時に1回。パソコンを閉じている間に置かれたぶんを拾う。
 apply("起動時の確認");
 
 try {
-  watch(INBOX, { persistent: true }, (_event, filename) => {
-    if (filename && !String(filename).endsWith(".json")) return;
-    schedule(`${filename ?? "変化"} を見つけた`);
-  });
+  for (const dir of INBOXES) {
+    if (!existsSync(dir)) continue;
+    watch(dir, { persistent: true }, (_event, filename) => {
+      if (filename && !String(filename).endsWith(".json")) return;
+      schedule(`${filename ?? "変化"} を見つけた`);
+    });
+  }
 } catch (e) {
   log(`見張れませんでした: ${e.message}`);
   log("30秒おきに見に行く形に切り替えます。");

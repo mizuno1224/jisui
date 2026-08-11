@@ -151,14 +151,14 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-10.3"
+SKILL_VERSION = "2026-08-11.1"
 
 
 # つながらないときの受け渡し場所。
 # ここは Cowork(エージェント)が読み書きできる接続済みフォルダで、
 # db.py 自身(サンドボックスの中)からは書けない。だからこの定数は
 # 「エージェントに書いてもらう場所」を伝えるためだけに使う。
-INBOX_DIR = r"C:\Users\mmizu\家計簿\inbox"
+INBOX_DIR = r"C:\Users\mmizu\jisui\inbox"
 
 # 受け渡し JSON の目印と版。
 # 次の工程で「この JSON を読んで Supabase に適用するスクリプト」を別の人が書く。
@@ -542,6 +542,11 @@ class Jisui:
             "読んだ設定": used,
             "ログイン中": name or f"(user_id …{str(self.user_id)[-6:]})",
             "接続先": self.url,
+            # 【受け渡し場所も答える】
+            # 届かなかったときの記録はここに置く。ここがパソコン側の見張りと
+            # 食い違っていると、置いても誰も取りに来ない。実際にそうなった。
+            # 場所を移したときは、ここが変わったことを必ず目で確かめる。
+            "受け渡し場所": INBOX_DIR,
         }
 
     def _get_token(self) -> str:
@@ -1638,7 +1643,7 @@ class Jisui:
         """
         カード明細の CSV を読んで transactions に入れる。**既定では書き込まない。**
 
-        引退した家計簿スキル(C:\\Users\\mmizu\\家計簿\\skills\\_kakeibo_引退\\SKILL.md)に
+        引退した家計簿スキル(C:\\Users\\mmizu\\jisui\\_引退\\家計簿\\skills\\_kakeibo_引退\\SKILL.md)に
         あった機能を、Supabase 版として戻したもの。流儀はそのまま:
 
           ・費目は分類辞書(expense_rules)で機械的に決める。
@@ -1661,7 +1666,7 @@ class Jisui:
                    辞書には足さない(足すのは人の承認を得た add_rule だけ)
 
         data を渡せば、ファイルを開かずに中身から直接読める。
-        Cowork のサンドボックスから C:\\Users\\mmizu\\家計簿 が見えないとき、
+        Cowork のサンドボックスから C:\\Users\\mmizu\\jisui が見えないとき、
         エージェントが自分で読んだ中身を渡すために使う。
         """
         if on_unknown not in ("stop", "review"):
