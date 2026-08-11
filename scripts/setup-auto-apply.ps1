@@ -1,77 +1,61 @@
-﻿# チャットが置いた記録を、15分おきに自動でアプリへ入れる。
+﻿# チャットが置いた記録を、自動でアプリに反映させる常駐を入れる。
 #
-# 【何のためか】
-# チャット(Cowork)はクラウドで動くのでデータベースに直接は届かない。
-# 接続済みフォルダの inbox に JSON を置くところまではできるので、
-# それを拾って入れる係を、パソコン側に常駐させる。
+# 【何をするか】
+# scripts/watch-inbox.mjs を「スタートアップ」に登録する。
+# パソコンにログオンすると裏で動きはじめ、inbox にファイルが置かれた
+# 【数秒後】に取り込む。15分待つ必要はない。
 #
-# これがあると、パソコンが起きている間は【貼り付けの操作が要らなくなる】。
-# スマホしか無いときは、アプリの「チャットから取り込む」を使う。
+# 【タスクスケジューラを使わない理由】
+# 管理者権限や書式の制約でつまずきやすい。実際に登録が弾かれた。
+# スタートアップフォルダに置くだけなら特別な権限が要らず、
+# 何が動いているかもエクスプローラーで見える。やめるのも消すだけ。
 #
 # 【このファイルは BOM 付き UTF-8 で保存すること】
 # Windows PowerShell 5.1 は BOM が無いと cp932 として読み、日本語が化けて構文エラーになる。
 #
 # 【使い方】
-#   登録する:  powershell -ExecutionPolicy Bypass -File scripts/setup-auto-apply.ps1
-#   やめる:    powershell -ExecutionPolicy Bypass -File scripts/setup-auto-apply.ps1 -Remove
-#   様子を見る: Get-Content "$env:USERPROFILE\\jisui-auto-apply.log" -Tail 30
+#   入れる:     powershell -ExecutionPolicy Bypass -File scripts/setup-auto-apply.ps1
+#   やめる:     powershell -ExecutionPolicy Bypass -File scripts/setup-auto-apply.ps1 -Remove
+#   様子を見る: Get-Content "$env:USERPROFILE\jisui-auto-apply.log" -Tail 30
 
 param([switch]$Remove)
 
-$TaskName = "kurashi-apply-inbox"
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$log  = Join-Path $env:USERPROFILE "jisui-auto-apply.log"
+$repo    = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$startup = [Environment]::GetFolderPath('Startup')
+$vbs     = Join-Path $startup "kurashi-watch-inbox.vbs"
+$log     = Join-Path $env:USERPROFILE "jisui-auto-apply.log"
 
 if ($Remove) {
-  try {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
-    Write-Output "やめました: $TaskName"
-  } catch {
-    Write-Output "登録されていませんでした($TaskName)"
-  }
+  if (Test-Path $vbs) { Remove-Item -LiteralPath $vbs -Force; Write-Output "やめました: $vbs" }
+  else { Write-Output "入っていませんでした" }
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.CommandLine -like "*watch-inbox*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Output "止めました: pid $($_.ProcessId)" }
   return
 }
 
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw "node が見つかりません。Node.js を入れてから実行してください。" }
 
-# 実行するもの。出力は追記でログに残す。
-# 【--apply を付ける】。付けないと下見だけで何も入らない。
-$inner = '& "' + $node + '" "' + (Join-Path $repo "scripts\apply-inbox.mjs") + '" --apply *>&1 | ' +
-         'ForEach-Object { "[{0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $_ } | ' +
-         'Add-Content -Encoding utf8 "' + $log + '"'
+# 窓を出さずに動かすための小さな入れ物。0 = 隠す、$false = 終わるのを待たない。
+$q = [char]34
+$cmd = $q + $node + $q + " " + $q + (Join-Path $repo "scripts\watch-inbox.mjs") + $q
+$lines = @(
+  "' くらし: チャットが置いた記録を自動でアプリに反映する常駐。",
+  "' scripts/setup-auto-apply.ps1 が作ったもの。このファイルを消せば止まる。",
+  "Set sh = CreateObject(" + $q + "WScript.Shell" + $q + ")",
+  "sh.CurrentDirectory = " + $q + $repo + $q,
+  "sh.Run " + $q + ($cmd -replace [regex]::Escape($q), ($q + $q)) + $q + ", 0, False"
+)
+Set-Content -LiteralPath $vbs -Value $lines -Encoding utf8
 
-$action = New-ScheduledTaskAction -Execute "powershell.exe" `
-  -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -Command "' + $inner.Replace('"','\"') + '"') `
-  -WorkingDirectory $repo
-
-# 15分おき。パソコンが寝ている間は動かない(それでよい)。
-#
-# 【ログオン時トリガに繰り返しを後付けしない】
-# $trigger.Repetition に代入する書き方は、Windows の書式検査で弾かれる
-# (HRESULT 0x80041318)。-Once のトリガに最初から繰り返しを持たせるのが正しい。
-# ログオン時の1回は、別のトリガとして並べる。
-$every = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-  -RepetitionInterval (New-TimeSpan -Minutes 15)
-$atLogon = New-ScheduledTaskTrigger -AtLogOn
-$atLogon.Delay = "PT2M"
-$trigger = @($every, $atLogon)
-
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-  -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
-  -MultipleInstances IgnoreNew
-
-Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-  -Settings $settings -Description "Cowork が inbox に置いた記録を Supabase へ入れる" | Out-Null
-
-Write-Output "登録しました: $TaskName"
-Write-Output "  対象      : $repo"
+Write-Output "入れました: $vbs"
+Write-Output "  見張る場所: $env:USERPROFILE\家計簿\inbox"
 Write-Output "  ログ      : $log"
-Write-Output "  間隔      : 15分ごと(ログオンの2分後から)"
 Write-Output ""
-Write-Output "いま1回動かして確かめます..."
-Start-ScheduledTask -TaskName $TaskName
-Start-Sleep -Seconds 8
-if (Test-Path $log) { Get-Content $log -Tail 12 } else { Write-Output "(まだログがありません。inbox が空なら何も出ません)" }
+Write-Output "いま動かします..."
+Start-Process -FilePath "wscript.exe" -ArgumentList ([char]34 + $vbs + [char]34) -WindowStyle Hidden
+Start-Sleep -Seconds 6
+if (Test-Path $log) { Get-Content $log -Tail 8 } else { Write-Output "(まだログがありません)" }
+Write-Output ""
+Write-Output "次からはログオンで自動的に動きます。"

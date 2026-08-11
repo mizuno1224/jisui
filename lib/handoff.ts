@@ -18,6 +18,9 @@ import * as local from "@/lib/local-db";
 
 export const HANDOFF_KIND = "jisui-handoff";
 
+/** 入れなかったが、失敗ではないもの。すでに同じものがある場合など。 */
+class SkipError extends Error {}
+
 export type HandoffRecord = {
   op: string;
   key?: string;
@@ -156,6 +159,11 @@ export async function applyHandoff(
       done.push(what);
       if (r.key) newKeys.push(r.key);
     } catch (e) {
+      if (e instanceof SkipError) {
+        skipped.push(`${what} — ${e.message}`);
+        if (r.key) newKeys.push(r.key);
+        continue;
+      }
       failed.push({ what, why: e instanceof Error ? e.message : String(e) });
     }
   }
@@ -333,9 +341,37 @@ async function applyOne(r: HandoffRecord, householdId: string, supabase: Client)
       const even = rows.map((row) =>
         Object.fromEntries(keys.map((k) => [k, row[k] ?? null])),
       );
+      /*
+       * 【同じ名前のレシピを二重に作らない】
+       * チャットは「銀鮭の照り焼き」のように、既にあるものの
+       * 作り直したカードを送ってくることがある。素直に入れると同名が2つ並び、
+       * どちらが本物か分からなくなる。実際に1件そうなった。
+       * 既にある名前は飛ばし、何を飛ばしたかを呼び出し側に伝える。
+       */
+      let toInsert = even;
+      if (table === "recipes") {
+        const names = even.map((x) => String(x.name ?? ""));
+        const found = await supabase
+          .from("recipes")
+          .select("name")
+          .eq("household_id", householdId)
+          .in("name", names);
+        if (found.error) throw found.error;
+        const exists = new Set((found.data ?? []).map((r) => (r as { name: string }).name));
+        toInsert = even.filter((x) => !exists.has(String(x.name ?? "")));
+        if (toInsert.length === 0) {
+          throw new SkipError(
+            `同じ名前のレシピが既にあります: ${[...exists].join("、")}。` +
+              `作り直したいときは、レシピ画面から直してください。`,
+          );
+        }
+      }
+
       // recipe_ingredients には household_id が無い(世帯はレシピ経由で判定される)
       const withHousehold =
-        table === "recipe_ingredients" ? even : even.map((x) => ({ ...x, household_id: householdId }));
+        table === "recipe_ingredients"
+          ? toInsert
+          : toInsert.map((x) => ({ ...x, household_id: householdId }));
       const ins = await supabase.from(table).insert(withHousehold);
       if (ins.error) throw ins.error;
       return;
