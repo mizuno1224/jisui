@@ -118,6 +118,12 @@ try:
     check("置き場所を示す", INBOX in out)
     check("確かめる前に言うなと書く", "確かめる前に" in out)
     check("SQLite に書くなと書く", "SQLite" in out)
+    # 読めないときに推測で献立を組ませないための案内。ここが抜けると
+    # 「在庫が読めないので推測で提案します」に戻る。
+    check("いまの状況.md を読めと案内する", "いまの状況.md" in out)
+    check("推測するなと書く", "推測で提案します" in out or "読めます" in out)
+    check("実行場所の切り替え方が今の表記", "お使いのコンピュータに移動" in out)
+    check("古いボタン名が残っていない", "Run this task" not in out)
 finally:
     io.open(cj, "w", encoding="utf-8").write(orig)
 

@@ -230,8 +230,35 @@ if (!existsSync(INBOX)) {
 log(`見張りを始めます: ${INBOXES.join(" と ")}`);
 log("チャットがここに記録を置くと、数秒でアプリに反映されます。");
 
+/*
+ * いまの在庫・献立をフォルダに書き出す。
+ *
+ * 【なぜ見張りがこれをやるか】
+ * Cowork(クラウド)は Supabase に届かないので在庫を読めず、
+ * 「在庫が読めないので推測で提案します」と前置きして献立を組んでいた。
+ * だがフォルダのファイルは読める。だからパソコン側が書いておけばよい。
+ * 取り込みと同じ息づかいで動かすのが自然なので、ここに置く。
+ * 中身が変わっていなければ書かないので、空回りしても害は無い。
+ */
+function refreshContext(why) {
+  const child = spawn(process.execPath, [join(REPO, "scripts", "write-context.mjs")], {
+    cwd: REPO,
+    windowsHide: true,
+  });
+  let out = "";
+  child.stdout.on("data", (b) => (out += b.toString("utf8")));
+  child.stderr.on("data", (b) => (out += b.toString("utf8")));
+  child.on("close", () => {
+    const line = out.trim().split("\n").filter(Boolean).pop();
+    // 「変わっていない」は毎回出るのでログに残さない。ログが読めなくなる。
+    if (line && !line.includes("変わっていない")) log(`いまの状況(${why}): ${line}`);
+  });
+  child.on("error", (e) => log(`いまの状況を書けませんでした: ${e.message}`));
+}
+
 // 起動時に1回。パソコンを閉じている間に置かれたぶんを拾う。
 apply("起動時の確認");
+refreshContext("起動時");
 
 /*
  * 【黙って死なせない】
@@ -285,6 +312,9 @@ process.on("unhandledRejection", (e) => {
 // 1行で判定できるようにするため。
 setInterval(() => {
   apply("念のための確認");
+  // Cowork が読むぶんも、ここで一緒に新しくする。
+  // アプリで在庫をいじったぶんが、遅くとも5分でチャットに伝わる。
+  refreshContext("5分ごと");
   try {
     writeFileSync(LOCK, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
   } catch {
