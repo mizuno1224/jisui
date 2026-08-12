@@ -84,5 +84,11 @@ Write-Output ""
 Write-Output "※ この zip には cowork.json(ログイン情報)が入っています。"
 Write-Output "   人に渡したり、共有フォルダに置いたりしないこと。"
 Write-Output ""
-Write-Output "確認するには、チャットでもコードでも j.whoami() を呼ぶ"
-Write-Output "  → 版 と このファイルの場所 が出る"
+# 【配る前に、その zip を実際に動かす】
+# 「差し替えてください」と3回頼んで3回とも別の理由で動かなかった。
+# どれも入れてもらってから判明した。頼む側が確かめずに頼んでいたのが原因。
+Write-Output "--- 配る前の確認 ---"
+& python (Join-Path $PSScriptRoot "check-skill-zip.py") $zip
+if ($LASTEXITCODE -ne 0) {
+  throw "この zip は使えません。上の × を直してから、もう一度 sync-skill.ps1 を実行してください。"
+}

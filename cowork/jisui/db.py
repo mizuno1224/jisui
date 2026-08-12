@@ -151,7 +151,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-12.1"
+SKILL_VERSION = "2026-08-12.2"
 
 
 # つながらないときの受け渡し場所。
@@ -566,6 +566,33 @@ def _request(method: str, url: str, headers: dict[str, str], body: Any = None) -
                 "【手元の SQLite には絶対に書かないこと。】書けば “成功” してしまい、\n"
                 "アプリには何も出てこないまま記録が消えます。"
             )
+        else:
+            # 【ここが Cowork が毎回通る道】
+            # クラウドからは Supabase に届かないので、ログインの通信からして失敗する。
+            # つまり Jisui() を作る時点で落ち、何をしようとしていたかは
+            # db.py には分からない(まだ何も呼ばれていない)。
+            # 以前はここで案内を出しておらず、素っ気ない通信エラーだけが出ていた。
+            # いちばんよく通る道が、いちばん不親切だった。
+            hint = (
+                "\n\n【記録を頼まれていたなら、捨てないでください】\n"
+                "ログインの通信からして届かないので、db.py には何をしようとしていたか\n"
+                "分かりません。あなたが組み立ててください。handoff() は通信しないので、\n"
+                "つながらなくても必ず動きます。\n"
+                "\n"
+                "  from db import handoff\n"
+                "  h = handoff((\"add_shopping\", {\"items\": [{\"item\": \"牛乳\"}]}),\n"
+                "              note=\"どの会話ぶんか\")\n"
+                "\n"
+                f"h[\"中身\"] を h[\"ファイル名\"] という名前で {INBOX_DIR} に保存します。\n"
+                f"保存したら device_list_dir で {INBOX_DIR} を一覧し、\n"
+                "そのファイルが在ることを目で見てから報告してください。\n"
+                "【確かめる前に「置きました」と言わないこと。】\n"
+                "一覧に出てこなければ置けていない。置けたと言わず、その旨を伝えること。\n"
+                "(ls や cat では確かめられません。クラウドからパソコンは見えません)\n"
+                "\n"
+                "【手元の SQLite には絶対に書かないこと。】書けば “成功” してしまい、\n"
+                "アプリには何も出てこないまま記録が消えます。"
+            )
         raise JisuiOffline(
             f"通信できませんでした: {Jisui._explain_network_error(e.reason)}{hint}",
             records,
@@ -699,7 +726,12 @@ class Jisui:
                 same_user = cached.get("email") == self._email
                 if same_user and cached.get("expires_at", 0) > time.time() + 60:
                     return cached["access_token"]
-            except (json.JSONDecodeError, KeyError):
+            # OSError も受けること。控えが読めないだけで、ログイン自体は
+            # やり直せばよい。ここで例外を通すと Jisui() を作るだけで落ち、
+            # 英語の生のエラーしか出ないので原因が誰にも分からない。
+            # (置き場所がスキルのフォルダなので、読み取り専用で配られたり、
+            #  同名のフォルダが出来ていたりする)
+            except (json.JSONDecodeError, KeyError, OSError, ValueError):
                 pass
 
         res = _request(
