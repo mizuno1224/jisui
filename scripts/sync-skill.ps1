@@ -41,14 +41,30 @@ Write-Output ("seihon : " + $src)
 Write-Output ("utsusi : " + $dst)
 
 # ---------------------------------------------------------------- 差し替え用の zip
-# パスワードの入った cowork.json は入れない。zip は手で運ぶもので、
-# 置き忘れると鍵がそのまま残る。Cowork 側は .env を自分で持っている。
+#
+# 【cowork.json を必ず入れること】
+# 一度これを「パスワードが入っているから」と外して zip を作り、
+# それを入れた Cowork がログインできなくなった。
+#   db.JisuiError: 接続情報が足りません: JISUI_SUPABASE_URL, ...
+# クラウドの Cowork は .env を持てない。スキルに同梱された cowork.json が
+# 唯一の鍵で、これが無いと何も読めないし書けない。
+#
+# .env は逆に入れない。あちらは Cowork 専用ユーザー、こちらは夫のログインで
+# 役割が違う。混ぜると手元の開発が別人として動きはじめる。
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $stage = Join-Path $env:TEMP ("jisui-skill-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force $stage | Out-Null
-foreach ($f in @("SKILL.md", "KAKEIBO.md", "db.py", "cowork.example.json", ".env.example")) {
+$zipFiles = @("SKILL.md", "KAKEIBO.md", "db.py", "cowork.json", "cowork.example.json", ".env.example")
+foreach ($f in $zipFiles) {
   $s = Join-Path $src $f
   if (Test-Path $s) { Copy-Item $s (Join-Path $stage $f) -Force }
+}
+
+# 【入ったかを確かめてから配ること】
+# 抜けていても zip は普通に出来上がるので、目で見ないと気づけない。
+if (-not (Test-Path (Join-Path $stage "cowork.json"))) {
+  Remove-Item $stage -Recurse -Force
+  throw "cowork.json が $src にありません。これが無いと Cowork はログインできません。cowork.example.json を写して作ってください。"
 }
 
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -58,6 +74,15 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Remove-Item $stage -Recurse -Force
 
 Write-Output ("zip    : " + $zip)
+
+# 中身を必ず見せる。抜けに気づけるのは、目で見たときだけ。
+$check = [System.IO.Compression.ZipFile]::OpenRead($zip)
+Write-Output "  中身:"
+$check.Entries | ForEach-Object { Write-Output ("    " + $_.FullName) }
+$check.Dispose()
+Write-Output ""
+Write-Output "※ この zip には cowork.json(ログイン情報)が入っています。"
+Write-Output "   人に渡したり、共有フォルダに置いたりしないこと。"
 Write-Output ""
 Write-Output "確認するには、チャットでもコードでも j.whoami() を呼ぶ"
 Write-Output "  → 版 と このファイルの場所 が出る"
