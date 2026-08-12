@@ -472,15 +472,20 @@ j.archive_csv(path)                          # 報告してから processed/ へ
 `import_card_csv` も `JisuiOffline` を投げる。例外は**明細1行ぶんずつ**
 (`op` は `import_card_row`)を抱えているので、`e.handoff()` を inbox に保存する。
 
-CSV そのものがサンドボックスから見えないときは、**あなたがファイルを読んで**
-中身を渡す。`parse_card_csv` は通信しないので、つながらなくても動く。
+CSV はサンドボックスから見えない。**あなたが道具でファイルを読んで**中身を渡す。
+`parse_card_csv` は通信しないので、つながらなくても動く。
+
+**`open()` を使わないこと。** クラウドからパソコンのファイルは開けない。
+記録をいちばん落としたくない場面で `FileNotFoundError` になる。
 
 ```python
 from db import parse_card_csv, handoff
-parsed = parse_card_csv(open(path, "rb").read(), name=path)
+data = <あなたのファイル読み取りの道具で読んだ中身>
+parsed = parse_card_csv(data, name="meisai202608.csv")
 h = handoff(*[("import_card_row", row) for row in parsed["行"]],
             note="イオンカード 2026-08 明細")
-# h["中身"] を h["ファイル名"] という名前で inbox に保存する
+# h["中身"] を h["ファイル名"] という名前で inbox に保存し、
+# device_list_dir で在ることを確かめてから報告する
 ```
 
 このとき**費目は付けない。**辞書が引けないので決めようがない。

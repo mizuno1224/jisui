@@ -151,7 +151,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-11.3"
+SKILL_VERSION = "2026-08-12.1"
 
 
 # つながらないときの受け渡し場所。
@@ -228,17 +228,22 @@ def inbox_status() -> dict:
     """
     受け渡し場所と、確かめ方。困ったときに人とエージェントが読むためのもの。
 
-    【状態を「調べて」返さないこと】
-    db.py はクラウドのコンテナにいて、パソコンのフォルダを見に行けない。
-    ここで os.path.isdir を呼んでも必ず False になり、「無い」と嘘をつく。
-    確かめるのは道具を持っているエージェントの仕事なので、その手順を返す。
+    【「フォルダが在るか」を答えているのではない】
+    下の isdir は、フォルダの有無ではなく【いま自分がパソコンの上にいるか】の
+    目安としてだけ使っている。偽は「フォルダが無い」ではなく
+    「ここからは見えない」の意味。db.py はクラウドのコンテナにいると
+    パソコンのフォルダを見に行けないので、有無を答えると必ず嘘になる。
+    在ることを確かめるのは道具を持っているエージェントの仕事なので、
+    ここでは手順のほうを返す。
     """
     on_pc = os.path.isdir(INBOX_DIR)
     return {
         "受け渡し場所": INBOX_DIR,
         "いまどこで動いているか": (
             "パソコンの上(そのまま読み書きできる)" if on_pc
-            else "パソコン以外(Cowork のクラウドなど)。道具ごしにだけ書ける"
+            else "パソコン以外(Cowork のクラウドなど)、"
+                 "またはパソコン上だがフォルダをまだ作っていない。"
+                 "Cowork なら道具ごしにだけ書ける"
         ),
         "確かめ方": [
             f"1. device_list_dir で {INBOX_DIR} を一覧する",
@@ -538,32 +543,26 @@ def _request(method: str, url: str, headers: dict[str, str], body: Any = None) -
         records = _HANDOFF_STACK[0] if _HANDOFF_STACK else []
         hint = ""
         if records:
-            where = inbox_dir()
-            # 【場所は決め打ちにせず、そのとき在るものを案内する】
-            # Windows のパスを書くと、サンドボックスに存在しない道を案内することになる。
-            # エージェントは近そうな場所に書いて「置きました」と言い、
-            # パソコンには何も届かない。実際にそうなった。
-            if where:
-                place = (
-                    f"  {where}\n"
-                    "に保存してください(保存するのはあなたの仕事です。db.py はそのフォルダに書けません)。\n"
-                    f"保存したら ls -l {where} で在ることを確かめてから報告すること。\n"
-                    "確かめる前に「置きました」と言わないこと。"
-                )
-            else:
-                place = (
-                    "ただし、いま保存できる場所がありません。\n"
-                    "つないでいるフォルダが1つも見つかりません(/sessions/*/mnt/* が空)。\n"
-                    "【自分の作業領域に保存して「置きました」と言わないこと。】\n"
-                    "パソコンには届きません。『フォルダがつながっていないので保存できない』と\n"
-                    "正直に伝え、C:\\Users\\mmizu\\jisui をこのチャットにつないでもらってください。"
-                )
+            # 【確かめ方に ls と書かないこと】
+            # Cowork のコンテナから ls C:\... を打つと、本当に置けていても
+            # 必ず「無い」と出る。パソコンのファイルは道具ごしにしか見えない。
+            # ここを ls のままにすると、置けたのに「置けませんでした」と
+            # 報告することになる。事故を防ぐための一文が、逆に事故を作る。
             hint = (
                 "\n\n【この内容は失われていません】\n"
                 f"残すべき操作が {len(records)} 件あります。\n"
                 "  h = e.handoff()\n"
                 "として返ってきた h[\"中身\"] を、h[\"ファイル名\"] という名前で\n"
-                f"{place}\n"
+                f"  {INBOX_DIR}\n"
+                "に保存してください(保存するのはあなたの仕事です。db.py はクラウドに\n"
+                "いるので、そのフォルダには書けませんし、見えません)。\n"
+                "\n"
+                f"保存したら device_list_dir で {INBOX_DIR} を一覧し、\n"
+                "そのファイルが在ることを目で見てから報告すること。\n"
+                "【確かめる前に「置きました」と言わないこと。】\n"
+                "一覧に出てこなければ置けていない。置けたと言わず、その旨を伝えること。\n"
+                "(ls や cat では確かめられません。クラウドからパソコンは見えません)\n"
+                "\n"
                 "【手元の SQLite には絶対に書かないこと。】書けば “成功” してしまい、\n"
                 "アプリには何も出てこないまま記録が消えます。"
             )
@@ -710,14 +709,23 @@ class Jisui:
             {"email": self._email, "password": self._password},
         )
         token = res["access_token"]
-        TOKEN_CACHE.write_text(
-            json.dumps({
-                "access_token": token,
-                "expires_at": time.time() + res.get("expires_in", 3600),
-                "email": self._email,          # 誰のトークンかを一緒に残す
-            }),
-            encoding="utf-8",
-        )
+        # 【控えが書けなくても止まらないこと】
+        # 置き場所はスキルのフォルダで、読み取り専用で配られることがある。
+        # ここで例外が上がると Jisui() を作るだけで落ち、しかも英語の生の
+        # エラーしか出ないので「鍵が違うのか、通信できないのか、書けないのか」が
+        # 誰にも分からない。控えはログイン回数を減らすためだけのものなので、
+        # 書けなければ諦めてそのまま進む。
+        try:
+            TOKEN_CACHE.write_text(
+                json.dumps({
+                    "access_token": token,
+                    "expires_at": time.time() + res.get("expires_in", 3600),
+                    "email": self._email,          # 誰のトークンかを一緒に残す
+                }),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         return token
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -1939,9 +1947,23 @@ class Jisui:
 
             report["書き込んだ"] = True
             report["取込件数"] = len(inserted)
-            report["次にすること"] = (
-                f"結果を報告してから archive_csv({parsed['ファイル']!r}) で processed/ へ移す"
-            )
+            # 【できない指示を出さないこと】
+            # Cowork から data= で取り込んだ場合、書き込みは成功しているのに
+            # archive_csv は必ず失敗する。成功直後に必ず失敗する手順を渡すと、
+            # 「取り込めなかったのかもしれない」と迷って報告が濁り、
+            # やり直して二重に入れようとする。
+            if os.path.isdir(INBOX_DIR):
+                report["次にすること"] = (
+                    f"結果を報告してから archive_csv({parsed['ファイル']!r}) で processed/ へ移す"
+                )
+            else:
+                report["次にすること"] = (
+                    "結果を報告する。"
+                    f"そのあと {parsed['ファイル']!r} を、あなたのファイル操作の道具で "
+                    "inbox から processed へ移す"
+                    "(archive_csv はこのプロセスからは使えません。"
+                    "取り込み自体はもう終わっているので、やり直さないこと)"
+                )
             return report
 
     @staticmethod
@@ -1961,7 +1983,21 @@ class Jisui:
         """
         src = Path(path)
         if not src.exists():
-            raise JisuiError(f"ファイルがありません: {src}")
+            # 【「ありません」で終わらせないこと】
+            # Cowork から呼ぶと、パソコンに実在していても exists() は必ず偽になる。
+            # 「ファイルがありません」とだけ言うと、エージェントはそれを人に伝え、
+            # 人は置いたはずのファイルを探し回ることになる。事実と違う案内をしない。
+            raise JisuiError(
+                f"このプロセスからは移せません: {src}\n"
+                "\n"
+                "【Cowork(クラウド)から呼んでいる場合】\n"
+                "パソコンのファイルは、あなたの remote-devices の道具でしか動かせません。\n"
+                f"  {src} を {INBOX_DIR.rsplit(chr(92), 1)[0]}\\processed\\ へ移してください。\n"
+                "移したあと device_list_dir で確かめてから報告すること。\n"
+                "\n"
+                "【パソコン上で呼んでいる場合】\n"
+                "そのパスにファイルがありません。置き場所と名前を確かめてください。"
+            )
         if processed_dir:
             dst_dir = Path(processed_dir)
         elif src.parent.name == "inbox":
@@ -2268,9 +2304,18 @@ def parse_card_csv(data: bytes | str, *, name: str | None = None) -> dict:
     Cowork(クラウド)で動いていて Supabase に届かないときでも、これは動く。
     読み取った行を handoff() に渡せば inbox 用の JSON になり、記録が失われない。
 
+    【中身を渡すこと。ファイルを開かせないこと】
+    この関数自体は通信しないので Cowork でも動くが、Cowork から
+    open(path) をするとパソコンのファイルは開けない。いちばん助けが要る場面
+    (つながらない・明細を1行ずつ inbox に逃がす場面)で、素っ気ない
+    FileNotFoundError だけが出て手が止まる。中身は道具で読んで渡すこと。
+
         from db import parse_card_csv, handoff
-        parsed = parse_card_csv(open(path, "rb").read(), name=path)
+        data = <あなたのファイル読み取りの道具で読んだ中身>
+        parsed = parse_card_csv(data, name="meisai202608.csv")
         h = handoff(*[("import_card_row", r) for r in parsed["行"]])
+
+    パソコン上で動いているときは read_local_file(path) で読めばよい。
 
     返り値の "行" は {date, amount, merchant_raw, merchant_norm, source, memo}。
     **費目は入っていない。**辞書を引くには接続が要るため、費目を決めるのは
