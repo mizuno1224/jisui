@@ -240,7 +240,13 @@ log("チャットがここに記録を置くと、数秒でアプリに反映さ
  * 取り込みと同じ息づかいで動かすのが自然なので、ここに置く。
  * 中身が変わっていなければ書かないので、空回りしても害は無い。
  */
+// 走っている最中にもう一度呼ばれても、重ねて動かさない。
+// fs.watch はファイル1つの作成と削除で何度も鳴るので、そのままだと
+// 同じ書き出しが並んで走り、Supabase を無駄に叩く。
+let refreshing = false;
 function refreshContext(why) {
+  if (refreshing) return;
+  refreshing = true;
   const child = spawn(process.execPath, [join(REPO, "scripts", "write-context.mjs")], {
     cwd: REPO,
     windowsHide: true,
@@ -249,11 +255,17 @@ function refreshContext(why) {
   child.stdout.on("data", (b) => (out += b.toString("utf8")));
   child.stderr.on("data", (b) => (out += b.toString("utf8")));
   child.on("close", () => {
+    // 【必ず旗を下ろすこと】。下ろし忘れると、二度と書き直せなくなる。
+    // しかも黙って古い中身を出し続けるので、誰も気づけない。
+    refreshing = false;
     const line = out.trim().split("\n").filter(Boolean).pop();
     // 「変わっていない」は毎回出るのでログに残さない。ログが読めなくなる。
     if (line && !line.includes("変わっていない")) log(`いまの状況(${why}): ${line}`);
   });
-  child.on("error", (e) => log(`いまの状況を書けませんでした: ${e.message}`));
+  child.on("error", (e) => {
+    refreshing = false;
+    log(`いまの状況を書けませんでした: ${e.message}`);
+  });
 }
 
 // 起動時に1回。パソコンを閉じている間に置かれたぶんを拾う。
@@ -284,8 +296,32 @@ try {
   for (const dir of INBOXES) {
     if (!existsSync(dir)) continue;
     const w = watch(dir, { persistent: true }, (_event, filename) => {
-      if (filename && !String(filename).endsWith(".json")) return;
-      schedule(`${filename ?? "変化"} を見つけた`);
+      const name = filename ? String(filename) : "";
+
+      /*
+       * 【チャットからの「いま更新して」】
+       *
+       * いまの状況.md は5分ごとに書き直している。だがアプリで在庫を直した
+       * 直後にチャットへ聞くと、最大5分前の中身を読むことになる。
+       * チャットは Supabase に届かないので、自分で取りに行けない。
+       *
+       * ただしチャットは【このフォルダに書ける】。そこで、
+       * 「更新して」という名前のファイルを置くことを合図にする。
+       * 新しい権限も、新しい通信の道も要らない。置いたら数秒で書き直す。
+       * 合図のファイルはこちらで消す(残すと毎回反応してしまう)。
+       */
+      if (name.includes("更新して")) {
+        try {
+          unlinkSync(join(dir, name));
+        } catch {
+          /* もう消えていることがある */
+        }
+        refreshContext("チャットからの求め");
+        return;
+      }
+
+      if (name && !name.endsWith(".json")) return;
+      schedule(`${name || "変化"} を見つけた`);
     });
     w.on("error", (e) => {
       log(`見張りが壊れました(${dir}): ${e.message}`);
