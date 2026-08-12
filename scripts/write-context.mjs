@@ -115,6 +115,86 @@ function render(ctx, stamp) {
     ["状態", (r) => r.status],
   ]));
 
+  /*
+   * 【放っておくと誰も気づかないもの】
+   *
+   * 過ぎた日の献立が「予定」のまま残っていても、誰も困らないので残り続ける。
+   * だが献立を組み直すときに「まだ作っていない」と読まれて、
+   * 済んだものがもう一度並ぶ。実際に 8/09 と 8/11 でそうなっていた。
+   * 作ったかどうかは本人にしか分からないので、こちらで決めずに、
+   * 【聞くべきこととして目立たせる】。
+   */
+  const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+  const cooked = new Set((ctx["直近の調理"] ?? []).map((r) => `${r.date}|${r.name}`));
+  const stale = (ctx["これからの献立"] ?? []).filter(
+    (r) => r.date < today && r.status === "予定",
+  );
+
+  // 同じ日に同じものが2回記録されている = 二重に入れた疑い
+  const seen = new Map();
+  for (const r of ctx["直近の調理"] ?? []) {
+    const k = `${r.date}|${r.name}`;
+    seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  const dup = [...seen.entries()].filter(([, n]) => n > 1);
+
+  /*
+   * 逆向きの取り残し。「実施」なのに作った記録が無い行。
+   *
+   * 作った記録の日付や名前をあとから直すと、直す前に実施にした献立が
+   * 実施のまま残る。自動で戻すと、人が手で実施にした行まで戻してしまうので、
+   * 戻さずに【気づけるようにする】。
+   *
+   * 「直近の調理」に載っている範囲だけを見る。それより古い日を見ると、
+   * 記録が流れて消えただけのものを「取り残し」と誤って言うことになる。
+   */
+  const cookDates = (ctx["直近の調理"] ?? []).map((r) => r.date).sort();
+  const since = cookDates[0];
+  const orphan = since
+    ? (ctx["これからの献立"] ?? []).filter(
+        (r) => r.status === "実施" && r.date >= since && !cooked.has(`${r.date}|${r.name}`),
+      )
+    : [];
+
+  if (stale.length || dup.length || orphan.length) {
+    out.push("## 確認が要ること");
+    out.push("");
+    out.push("**献立の相談をする前に、ここを本人に確かめること。**");
+    out.push("勝手に決めないこと。作ったかどうかは本人にしか分からない。");
+    out.push("");
+    if (stale.length) {
+      out.push("### 過ぎた日なのに「予定」のまま");
+      out.push("");
+      out.push(table(stale, [
+        ["日", (r) => r.date],
+        ["献立", (r) => r.name],
+        ["作った記録", (r) => (cooked.has(`${r.date}|${r.name}`) ? "ある" : "ない")],
+      ]));
+      out.push("「作った記録:ある」は、記録は入っているのに状態が変わっていないもの。");
+      out.push("「ない」は、作ったのか作らなかったのか分からないもの。**聞くこと。**");
+      out.push("");
+    }
+    if (dup.length) {
+      out.push("### 同じ日に2回記録されているもの");
+      out.push("");
+      for (const [k, n] of dup) {
+        const [d, name] = k.split("|");
+        out.push(`- ${d} ${name} … ${n} 回`);
+      }
+      out.push("");
+      out.push("二重に入れた疑いがある。**どちらを残すか聞くこと。**");
+      out.push("");
+    }
+    if (orphan.length) {
+      out.push("### 「実施」なのに作った記録が無い");
+      out.push("");
+      out.push(table(orphan, [["日", (r) => r.date], ["献立", (r) => r.name]]));
+      out.push("作った記録の日付や名前を直したときの取り残しの疑い。");
+      out.push("**本当に作ったのかを聞くこと。**");
+      out.push("");
+    }
+  }
+
   out.push("## 買い物リスト");
   out.push("");
   out.push(table(ctx["買い物リスト"], [

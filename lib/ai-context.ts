@@ -111,7 +111,11 @@ export function buildAiContext(args: {
   for (const c of recent) push(`- ${c.date} ${c.name ?? ""}`);
   push();
 
-  const upcoming = args.mealPlan.filter((m) => m.date >= today && m.status !== "中止");
+  // 【「予定」だけを渡す】
+  // 以前は「中止でないもの」を渡していた。作り終わった献立(実施)まで
+  // 「これから作るもの」として渡してしまい、AI が「もう決まっているから
+  // 別のものを」と判断していた。済んだものは「直近に作ったもの」で伝わる。
+  const upcoming = args.mealPlan.filter((m) => m.date >= today && m.status === "予定");
   push("## これからの献立(決まっているぶん)");
   push();
   if (upcoming.length === 0) push("(まだ決まっていません)");

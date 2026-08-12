@@ -67,7 +67,9 @@ export function InventoryScreen() {
   const plannedUses = useMemo(() => {
     const today = todayISO();
     const upcoming = plans.rows
-      .filter((p) => p.date >= today && p.status !== "中止" && p.recipe_id)
+      // 【「予定」だけを見る】。作り終わった献立(実施)の材料に
+      // 「使う予定」の札を出し続けると、使い切った材料が残って見える。
+      .filter((p) => p.date >= today && p.status === "予定" && p.recipe_id)
       .sort((a, b) => a.date.localeCompare(b.date));
 
     const byRecipe = new Map<number, RecipeIngredient[]>();
