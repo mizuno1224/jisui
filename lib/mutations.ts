@@ -429,6 +429,19 @@ export async function setShareForMerchant(keyword: string, share: "夫婦" | "�
  * 疑わしい組を消して片付けると、本物の支出が消える。
  * 残したまま検査から外すのが正しい。
  */
+/** どちらの口座から出たかを直す。精算の向きが変わるので、一覧から直せるようにする。 */
+export async function setPayer(ids: number[], payer: "夫" | "妻") {
+  if (ids.length === 0) return;
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("transactions")
+    .update({ payer })
+    .in("id", ids)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("transactions");
+}
+
 export async function markNotDuplicate(ids: number[]) {
   if (ids.length === 0) return;
   const supabase = requireClient();

@@ -189,6 +189,11 @@ export type Transaction = {
    * 一度決めた組を毎回聞き直さないために持つ。
    */
   dup_ok: boolean;
+  /**
+   * どちらの口座から出たか。share(誰のための支出か)とは別物。
+   * 精算の向きを決めるのに要る。
+   */
+  payer: "夫" | "妻";
 };
 
 export type Budget = {

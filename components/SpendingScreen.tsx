@@ -6,6 +6,8 @@ import { BudgetMeters } from "@/components/BudgetMeters";
 import { LoadNotice, ScreenHeader } from "@/components/ScreenHeader";
 import { SpendingChart } from "@/components/SpendingChart";
 import { DuplicateSheet, type DupPair } from "@/components/DuplicateSheet";
+import { SettlementCard } from "@/components/SettlementCard";
+import { setShare } from "@/lib/mutations";
 import { ShareSheet } from "@/components/ShareSheet";
 import { TransactionSheet } from "@/components/TransactionSheet";
 import { BudgetSheet } from "@/components/BudgetSheet";
@@ -32,6 +34,10 @@ export function SpendingScreen() {
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
+  /** 一覧の絞り込み。null = 全部 */
+  const [walletFilter, setWalletFilter] = useState<"夫婦" | "夫" | "妻" | "未分類" | null>(
+    null,
+  );
 
   const months = useMemo(() => {
     const set = new Set(tx.rows.map((t) => t.date.slice(0, 7)));
@@ -140,6 +146,18 @@ export function SpendingScreen() {
     return out;
   }, [tx.rows, month, chartCategory]);
 
+  /*
+   * 一覧に出すぶん。お財布で絞り込める。
+   *
+   * 【絞り込んでも件数は元の数を出す】
+   * 「明細(3件)」とだけ出ると、他が消えたのか元から3件なのか分からない。
+   * 絞っていることを画面に残す。
+   */
+  const listed = useMemo(
+    () => (walletFilter ? inMonth.filter((t) => t.share === walletFilter) : inMonth),
+    [inMonth, walletFilter],
+  );
+
   const total = inMonth.reduce((s, t) => s + t.amount, 0);
   const food = inMonth.filter((t) => t.category === "食費").reduce((s, t) => s + t.amount, 0);
   const foodBudget = budgetFor("食費");
@@ -220,16 +238,37 @@ export function SpendingScreen() {
         </button>
       )}
 
+      <SettlementCard
+        rows={tx.rows}
+        month={month}
+        onFixUnclassified={() => setShareOpen(true)}
+      />
+
       {/* 誰のぶんか。折半の精算に使う */}
       <section className="px-4 pt-4">
         <div className="grid grid-cols-3 gap-2">
           {(["夫婦", "夫", "妻"] as const).map((s) => (
-            <div key={s} className="rounded-2xl bg-white p-3 dark:bg-neutral-900">
-              <p className="text-[11px] font-medium text-neutral-500">{s}</p>
+            <button
+              key={s}
+              type="button"
+              onClick={() => setWalletFilter(walletFilter === s ? null : s)}
+              className={`rounded-2xl p-3 text-left ${
+                walletFilter === s
+                  ? "bg-emerald-600 text-white"
+                  : "bg-white dark:bg-neutral-900"
+              }`}
+            >
+              <p
+                className={`text-[11px] font-medium ${
+                  walletFilter === s ? "text-white/80" : "text-neutral-500"
+                }`}
+              >
+                {s}
+              </p>
               <p className="mt-0.5 text-lg font-bold tabular-nums">
                 {yen(byShare.get(s) ?? 0)}
               </p>
-            </div>
+            </button>
           ))}
         </div>
       </section>
@@ -323,11 +362,22 @@ export function SpendingScreen() {
 
       {inMonth.length > 0 && (
         <section className="mt-5">
-          <h2 className="px-4 pb-2 text-xs font-bold text-neutral-500">
-            明細({inMonth.length}件・タップで修正)
-          </h2>
+          <div className="flex items-baseline justify-between px-4 pb-2">
+            <h2 className="text-xs font-bold text-neutral-500">
+              明細({listed.length}件・タップで修正)
+            </h2>
+            {walletFilter && (
+              <button
+                type="button"
+                onClick={() => setWalletFilter(null)}
+                className="text-xs font-bold text-emerald-700 dark:text-emerald-400"
+              >
+                「{walletFilter}」で絞り込み中 ✕
+              </button>
+            )}
+          </div>
           <ul className="divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
-            {inMonth.map((t) => (
+            {listed.map((t) => (
               <li key={t.id}>
                 <button
                   type="button"
@@ -346,6 +396,34 @@ export function SpendingScreen() {
                   </span>
                   <span className="shrink-0 text-sm font-semibold tabular-nums">{yen(t.amount)}</span>
                 </button>
+                {/*
+                  * お財布は行の中で直せるようにする。
+                  * 一覧 → 明細を開く → 直す → 戻る、では数十件を片付けられない。
+                  */}
+                <div className="flex gap-1 px-4 pb-2">
+                  {(["夫婦", "夫", "妻"] as const).map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={async () => {
+                        await setShare([t.id], w);
+                        tx.refetch();
+                      }}
+                      className={`h-7 rounded-full px-2.5 text-[11px] font-bold ${
+                        t.share === w
+                          ? "bg-emerald-600 text-white"
+                          : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+                      }`}
+                    >
+                      {w}
+                    </button>
+                  ))}
+                  {t.share === "未分類" && (
+                    <span className="flex h-7 items-center px-1 text-[11px] font-bold text-amber-600">
+                      未分類
+                    </span>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
