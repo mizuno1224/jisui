@@ -151,7 +151,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-12.4"
+SKILL_VERSION = "2026-08-13.1"
 
 
 # つながらないときの受け渡し場所。
@@ -860,8 +860,17 @@ class Jisui:
             for k in row:
                 if k not in keys:
                     keys.append(k)
+        # 【世帯の列を持たない表がある】
+        # recipe_ingredients は recipe_id を通してレシピにぶら下がっているので、
+        # 自分では household_id を持たない。そこへ付けて送ると
+        #   400 PGRST204 "Could not find the 'household_id' column"
+        # で【1行も入らない】。実際にこれで材料の登録が丸ごと落ちた。
+        # 表が増えたときは supabase/01_schema.sql を見て、
+        # household_id の無い表をここに足すこと。
+        no_household = {"recipe_ingredients", "households"}
         payload = [
-            {"household_id": self.household_id, **{k: row.get(k) for k in keys}}
+            ({} if table in no_household else {"household_id": self.household_id})
+            | {k: row.get(k) for k in keys}
             for row in rows
         ]
         # household_id は入れずに残す。適用するのは別の人・別の世帯かもしれないので、

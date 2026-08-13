@@ -268,9 +268,44 @@ function refreshContext(why) {
   });
 }
 
+/*
+ * 常備品を切らしていないか見て、切らしたぶんを買い物リストに足す。
+ *
+ * 常備品は「いつも家にあるもの」として買い物リストから除かれる決まりなので、
+ * 切らしたときに気づく道が無かった。牛乳を切らしてもレシピ画面は
+ * 灰色の「常備品」の札を出すだけで、買い物リストには出ない。
+ * 詳しくは scripts/restock-staples.mjs の頭を読むこと。
+ */
+let restocking = false;
+function restockStaples(why) {
+  if (restocking) return;
+  restocking = true;
+  const child = spawn(
+    process.execPath,
+    ["--experimental-strip-types", join(REPO, "scripts", "restock-staples.mjs"), "--apply"],
+    { cwd: REPO, windowsHide: true },
+  );
+  let out = "";
+  child.stdout.on("data", (b) => (out += b.toString("utf8")));
+  child.stderr.on("data", (b) => (out += b.toString("utf8")));
+  child.on("close", () => {
+    restocking = false;
+    // 足したときだけ書く。「0 件」を毎回書くとログが読めなくなる。
+    const line = out.split("\n").find((l) => l.startsWith("足しました:"));
+    if (line) log(`常備品(${why}): ${line}`);
+    const err = out.split("\n").find((l) => l.startsWith("足せませんでした"));
+    if (err) log(`常備品(${why}): ${err}`);
+  });
+  child.on("error", (e) => {
+    restocking = false;
+    log(`常備品を見られませんでした: ${e.message}`);
+  });
+}
+
 // 起動時に1回。パソコンを閉じている間に置かれたぶんを拾う。
 apply("起動時の確認");
 refreshContext("起動時");
+restockStaples("起動時");
 
 /*
  * 【黙って死なせない】
@@ -351,6 +386,8 @@ setInterval(() => {
   // Cowork が読むぶんも、ここで一緒に新しくする。
   // アプリで在庫をいじったぶんが、遅くとも5分でチャットに伝わる。
   refreshContext("5分ごと");
+  // 常備品を切らしていないかも、同じ間隔で見る。
+  restockStaples("5分ごと");
   try {
     writeFileSync(LOCK, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
   } catch {
