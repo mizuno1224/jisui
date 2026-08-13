@@ -176,6 +176,14 @@ export type Transaction = {
   receipt_path: string | null;
   needs_review: boolean;
   imported_at: string;
+  /**
+   * 誰のぶんの支出か。
+   *
+   * 取り込んだ時点では分からないので「未分類」で入る。
+   * ここを勝手に「夫婦」にすると、個人の買い物が家計に混ざったまま
+   * 気づけない。分からないものは分からないままにして、人が決める。
+   */
+  share: "夫婦" | "夫" | "妻" | "未分類";
 };
 
 export type Budget = {

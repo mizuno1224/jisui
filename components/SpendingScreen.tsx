@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { BudgetMeters } from "@/components/BudgetMeters";
 import { LoadNotice, ScreenHeader } from "@/components/ScreenHeader";
 import { SpendingChart } from "@/components/SpendingChart";
+import { ShareSheet } from "@/components/ShareSheet";
 import { TransactionSheet } from "@/components/TransactionSheet";
 import { BudgetSheet } from "@/components/BudgetSheet";
 import { addMonths, currentMonth, formatDate, monthLabel, yen } from "@/lib/dates";
@@ -28,6 +29,7 @@ export function SpendingScreen() {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [adding, setAdding] = useState(false);
   const [budgetOpen, setBudgetOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const months = useMemo(() => {
     const set = new Set(tx.rows.map((t) => t.date.slice(0, 7)));
@@ -39,6 +41,24 @@ export function SpendingScreen() {
     () => tx.rows.filter((t) => t.date.startsWith(month)),
     [tx.rows, month],
   );
+
+  /*
+   * 誰のぶんか。
+   *
+   * 【未分類は月をまたいで全部見る】
+   * 表示中の月だけを見ると、先月の未分類が画面から消えて忘れられる。
+   * 振り分けは月に関係なく片付けたいので、ここだけ全期間を見る。
+   */
+  const unclassified = useMemo(
+    () => tx.rows.filter((t) => t.share === "未分類"),
+    [tx.rows],
+  );
+
+  const byShare = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of inMonth) map.set(t.share, (map.get(t.share) ?? 0) + t.amount);
+    return map;
+  }, [inMonth]);
 
   const byCategory = useMemo(() => {
     const map = new Map<string, number>();
@@ -121,6 +141,42 @@ export function SpendingScreen() {
           ))}
         </div>
       </ScreenHeader>
+
+      {/*
+        * 未分類があることを、いちばん上で知らせる。
+        * 下のほうに置くと、スクロールしない人には一生見えない。
+        */}
+      {unclassified.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShareOpen(true)}
+          className="mx-4 mt-4 flex w-[calc(100%-2rem)] items-center justify-between rounded-2xl bg-amber-50 px-4 py-3.5 text-left active:bg-amber-100 dark:bg-amber-950/40 dark:active:bg-amber-900/40"
+        >
+          <span>
+            <span className="block text-sm font-bold text-amber-900 dark:text-amber-200">
+              誰のぶんか決めていない支出が {unclassified.length} 件
+            </span>
+            <span className="mt-0.5 block text-xs text-amber-800/80 dark:text-amber-300/80">
+              合計 {yen(unclassified.reduce((n, t) => n + t.amount, 0))}・1タップで振り分けられます
+            </span>
+          </span>
+          <span className="text-lg text-amber-700 dark:text-amber-300">›</span>
+        </button>
+      )}
+
+      {/* 誰のぶんか。折半の精算に使う */}
+      <section className="px-4 pt-4">
+        <div className="grid grid-cols-3 gap-2">
+          {(["夫婦", "夫", "妻"] as const).map((s) => (
+            <div key={s} className="rounded-2xl bg-white p-3 dark:bg-neutral-900">
+              <p className="text-[11px] font-medium text-neutral-500">{s}</p>
+              <p className="mt-0.5 text-lg font-bold tabular-nums">
+                {yen(byShare.get(s) ?? 0)}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {/* 買い物中に見たいのはこの2つ */}
       <section className="grid grid-cols-2 gap-3 px-4 pt-4">
@@ -250,6 +306,8 @@ export function SpendingScreen() {
           <path d="M12 5v14M5 12h14" strokeLinecap="round" />
         </svg>
       </button>
+
+      {shareOpen && <ShareSheet rows={unclassified} onClose={() => setShareOpen(false)} />}
 
       {(adding || editing) && (
         <TransactionSheet

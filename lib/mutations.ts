@@ -363,6 +363,65 @@ export async function saveTransaction(input: {
   invalidate("transactions");
 }
 
+/**
+ * 支出を「夫婦 / 夫 / 妻」に振り分ける。まとめて渡せる。
+ *
+ * 【1件ずつ送らないこと】
+ * 未分類は数十件たまる。1件ずつ往復すると、店内の電波では待たされる。
+ * in() でまとめて1回にする。
+ */
+export async function setShare(
+  ids: number[],
+  share: "夫婦" | "夫" | "妻" | "未分類",
+) {
+  if (ids.length === 0) return;
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("transactions")
+    .update({ share })
+    .in("id", ids)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("transactions");
+}
+
+/**
+ * 「この店はいつも◯◯のぶん」を分類辞書に覚えさせる。
+ *
+ * 次にカード明細を取り込んだとき、同じ店は自動で振り分けられる。
+ *
+ * 【費目は上書きしないこと】
+ * 辞書の行はもともと費目のためにある。ここで費目まで触ると、
+ * 人が決めた費目が黙って変わる。share だけを足す。
+ */
+export async function setShareForMerchant(keyword: string, share: "夫婦" | "夫" | "妻") {
+  const supabase = requireClient();
+  const householdId = getSession().householdId;
+  const { data } = await supabase
+    .from("expense_rules")
+    .select("id")
+    .eq("household_id", householdId)
+    .eq("keyword", keyword)
+    .maybeSingle();
+
+  const { error } = data
+    ? await supabase.from("expense_rules").update({ share }).eq("id", data.id).abortSignal(signal())
+    : await supabase
+        .from("expense_rules")
+        .insert({
+          household_id: householdId,
+          keyword,
+          // 費目が決まっていない店なので「要確認」で入れる。
+          // ここで勝手に費目を決めると、月次の比較が意味を失う。
+          category: "要確認",
+          share,
+          note: "誰のぶんかだけを決めた行",
+        })
+        .abortSignal(signal());
+  if (error) throw error;
+  invalidate("expense_rules");
+}
+
 export async function deleteTransaction(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("transactions").delete().eq("id", id).abortSignal(signal());

@@ -151,7 +151,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-13.1"
+SKILL_VERSION = "2026-08-13.3"
 
 
 # つながらないときの受け渡し場所。
@@ -1734,6 +1734,20 @@ class Jisui:
         return rows
 
     @staticmethod
+    def _match_share(self, rules: list[dict], merchant: str) -> str | None:
+        """店名から「誰のぶんか」を引く。決まっていなければ None。"""
+        norm = self.normalize_merchant(merchant) if hasattr(self, "normalize_merchant") else merchant
+        best = None
+        for r in rules:
+            kw = (r.get("keyword") or "").strip()
+            if not kw or not r.get("share"):
+                continue
+            if kw in merchant or kw in norm:
+                # いちばん長いキーワードを勝たせる(「イオン」より「イオンモール」)
+                if best is None or len(kw) > len(best[0]):
+                    best = (kw, r["share"])
+        return best[1] if best else None
+
     def match_rule(rules: list[dict], merchant: str) -> str | None:
         """
         辞書 rules と店名 merchant を照合して費目を返す。当たらなければ None。
@@ -1898,6 +1912,11 @@ class Jisui:
                 table.append({
                     **r,
                     "category": self.match_rule(rules, r["merchant_raw"]),
+                    # 【誰のぶんかは、決まっている店だけ入れる】
+                    # 辞書に share が無い店は「未分類」のままにする。
+                    # ここで推測して「夫婦」にすると、個人の買い物が家計に
+                    # 混ざったまま気づけない。分からないものは人が決める。
+                    "share": self._match_share(rules, r["merchant_raw"]) or "未分類",
                     "dedup_hash": self.dedup_hash(r["date"], r["amount"], r["merchant_raw"]),
                 })
 
@@ -2321,8 +2340,78 @@ def _parse_aeon(rows: list[list[str]]) -> tuple[list[dict], list[dict]]:
     return good, bad
 
 
+def _parse_smbc_meisai(rows: list[list[str]]) -> tuple[list[dict], list[dict]]:
+    """
+    三井住友カードの【明細ダウンロード】形式。_parse_smbc とは別物。
+
+    こちらは1行目に氏名の行があり、列は7つしかない。
+
+      水野 雅允 様,4980-00**-****-****,三井住友ゴールドＶＩＳＡ（ＮＬ）   ← 3列: カードの区切り
+      2026/07/05,ＡＭＡＺＯＮ．ＣＯ．ＪＰ,3480,１,１,3480,               ← 7列: 明細
+      ,,,,,311231                                                      ← 6列: 小計/合計
+
+      0 利用日   1 店名   2 利用金額   3 支払回数   4 何回目
+      5 当月支払額   6 備考(ETCの区間、海外のレート)
+
+    【金額は 2列目を使う】
+    5列目は当月支払額で、分割払いのときに1回ぶんしか入らない。
+    買い物そのものの額とずれるので使わない(楽天の parser と同じ理由)。
+
+    【1つのファイルに複数のカード・複数の人が入る】
+    3列の行が出てくるたびに、そこから下は別のカードになる。
+    誰が使ったかも変わる(夫のカードと妻のカードが同じファイルに並ぶ)。
+    取り違えると、妻の支出が夫のものとして記録される。
+    区切り行を読み飛ばすだけにせず、【いま誰のどのカードか】を持ち回ること。
+    """
+    good: list[dict] = []
+    bad: list[dict] = []
+    holder = ""
+    card = ""
+    for n, r in enumerate(rows, 1):
+        cells = [_clean_text(c) for c in r]
+        if not any(cells):
+            continue
+
+        # カードの区切り行。氏名・カード番号・カード名の3つ。
+        if len(r) == 3 and cells[1] and "*" in cells[1]:
+            holder = cells[0].replace("様", "").strip()
+            card = cells[2]
+            continue
+
+        # 小計・合計の行。日付が空で、金額だけが入っている。
+        # 取り込む対象ではないが、壊れた行でもないので bad に入れない。
+        if not cells[0] and any(cells[1:]):
+            digits = [c for c in cells if c.replace(",", "").isdigit()]
+            if digits and not cells[1]:
+                continue
+
+        if len(r) < 3:
+            bad.append({"行": n, "理由": "列が足りない", "中身": r})
+            continue
+        date = _date_slash(r[0])
+        if date is None:
+            bad.append({"行": n, "理由": f"日付として読めない: {r[0]!r}", "中身": r})
+            continue
+        amount = _to_int(r[2])
+        if amount is None:
+            bad.append({"行": n, "理由": f"金額として読めない: {r[2]!r}", "中身": r})
+            continue
+
+        memo = []
+        if card:
+            memo.append(card)
+        if holder:
+            memo.append(f"利用者:{holder}")
+        note = _clean_text(r[6]) if len(r) > 6 else ""
+        if note:
+            memo.append(note)
+        good.append(_card_row(date, amount, r[1], "三井住友カード", memo))
+    return good, bad
+
+
 _CARD_PARSERS = {
     "三井住友カード": _parse_smbc,
+    "三井住友カード(明細)": _parse_smbc_meisai,
     "楽天カード": _parse_rakuten,
     "イオンカード": _parse_aeon,
 }
@@ -2358,6 +2447,11 @@ def _detect_card_format(rows: list[list[str]]) -> str:
         return _BANK_HEADERS[head[0]]
     if head[:1] == ["日付"] and "出金金額(円)" in head:
         return _BANK_HEADERS["取扱日付"]
+    # 三井住友カードの【明細ダウンロード】形式。1行目が氏名の行で、
+    # 2つめの列がマスクされたカード番号(4980-00**-****-****)。
+    # 見出し無しの13列版とは別物なので、先に見分ける。
+    if rows and len(rows[0]) == 3 and "*" in (rows[0][1] or ""):
+        return "三井住友カード(明細)"
     # 三井住友カードは見出しが無い。1行目がいきなり明細で13列。
     if rows and len(rows[0]) >= 13 and _date_slash(rows[0][0]):
         return "三井住友カード"
