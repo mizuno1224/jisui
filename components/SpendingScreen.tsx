@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { BudgetMeters } from "@/components/BudgetMeters";
 import { LoadNotice, ScreenHeader } from "@/components/ScreenHeader";
 import { SpendingChart } from "@/components/SpendingChart";
+import { DuplicateSheet, type DupPair } from "@/components/DuplicateSheet";
 import { ShareSheet } from "@/components/ShareSheet";
 import { TransactionSheet } from "@/components/TransactionSheet";
 import { BudgetSheet } from "@/components/BudgetSheet";
@@ -30,6 +31,7 @@ export function SpendingScreen() {
   const [adding, setAdding] = useState(false);
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
 
   const months = useMemo(() => {
     const set = new Set(tx.rows.map((t) => t.date.slice(0, 7)));
@@ -53,6 +55,42 @@ export function SpendingScreen() {
     () => tx.rows.filter((t) => t.share === "未分類"),
     [tx.rows],
   );
+
+  /*
+   * 二重計上の疑い。
+   *
+   * 同じ金額・3日以内・【出どころが違う】組を探す。
+   * 出どころが同じ同額は除く。ETC の「同じ日・同じ金額」は
+   * 別々の料金所を通った本物の2件で、それを疑い始めると
+   * 正しい記録まで印が付いて読めなくなる。
+   *
+   * 【月で絞らない】。カード明細は月をまたいで届くので、
+   * 表示中の月だけ見ると、月末の買い物と翌月の明細の組が見つからない。
+   */
+  const dupPairs = useMemo<DupPair[]>(() => {
+    const rows = tx.rows.filter((t) => !t.dup_ok);
+    const byAmount = new Map<number, typeof rows>();
+    for (const t of rows) {
+      const list = byAmount.get(t.amount) ?? [];
+      list.push(t);
+      byAmount.set(t.amount, list);
+    }
+    const out: DupPair[] = [];
+    for (const list of byAmount.values()) {
+      if (list.length < 2) continue;
+      for (let i = 0; i < list.length; i++) {
+        for (let k = i + 1; k < list.length; k++) {
+          const a = list[i];
+          const b = list[k];
+          if (a.source === b.source) continue;
+          const days =
+            Math.abs(new Date(a.date).getTime() - new Date(b.date).getTime()) / 86400000;
+          if (days <= 3) out.push({ a, b });
+        }
+      }
+    }
+    return out;
+  }, [tx.rows]);
 
   const byShare = useMemo(() => {
     const map = new Map<string, number>();
@@ -161,6 +199,24 @@ export function SpendingScreen() {
             </span>
           </span>
           <span className="text-lg text-amber-700 dark:text-amber-300">›</span>
+        </button>
+      )}
+
+      {dupPairs.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setDupOpen(true)}
+          className="mx-4 mt-3 flex w-[calc(100%-2rem)] items-center justify-between rounded-2xl bg-red-50 px-4 py-3.5 text-left active:bg-red-100 dark:bg-red-950/40 dark:active:bg-red-900/40"
+        >
+          <span>
+            <span className="block text-sm font-bold text-red-900 dark:text-red-200">
+              二重計上かもしれない組が {dupPairs.length} 組
+            </span>
+            <span className="mt-0.5 block text-xs text-red-800/80 dark:text-red-300/80">
+              同じ金額・3日以内・別のカード。1組ずつ確かめられます
+            </span>
+          </span>
+          <span className="text-lg text-red-700 dark:text-red-300">›</span>
         </button>
       )}
 
@@ -308,6 +364,14 @@ export function SpendingScreen() {
       </button>
 
       {shareOpen && <ShareSheet rows={unclassified} onClose={() => setShareOpen(false)} />}
+
+      {dupOpen && (
+        <DuplicateSheet
+          pairs={dupPairs}
+          onClose={() => setDupOpen(false)}
+          onChanged={() => tx.refetch()}
+        />
+      )}
 
       {(adding || editing) && (
         <TransactionSheet

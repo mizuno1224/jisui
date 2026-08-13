@@ -422,6 +422,25 @@ export async function setShareForMerchant(keyword: string, share: "夫婦" | "�
   invalidate("expense_rules");
 }
 
+/**
+ * 「これは二重計上ではない」と決めた印を立てる。
+ *
+ * 【消すのではなく印にする理由】
+ * 疑わしい組を消して片付けると、本物の支出が消える。
+ * 残したまま検査から外すのが正しい。
+ */
+export async function markNotDuplicate(ids: number[]) {
+  if (ids.length === 0) return;
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("transactions")
+    .update({ dup_ok: true })
+    .in("id", ids)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("transactions");
+}
+
 export async function deleteTransaction(id: number) {
   const supabase = requireClient();
   const { error } = await supabase.from("transactions").delete().eq("id", id).abortSignal(signal());
