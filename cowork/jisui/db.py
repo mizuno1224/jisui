@@ -151,7 +151,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-13.3"
+SKILL_VERSION = "2026-08-14.1"
 
 
 # つながらないときの受け渡し場所。
@@ -1734,20 +1734,28 @@ class Jisui:
         return rows
 
     @staticmethod
-    def _match_share(self, rules: list[dict], merchant: str) -> str | None:
-        """店名から「誰のぶんか」を引く。決まっていなければ None。"""
-        norm = self.normalize_merchant(merchant) if hasattr(self, "normalize_merchant") else merchant
+    def _match_share(rules: list[dict], merchant: str) -> str | None:
+        """
+        店名から「誰のぶんか」を引く。決まっていなければ None。
+
+        【@staticmethod を外さないこと】
+        match_rule と同じく、辞書と店名だけで決まる純粋な処理。
+        self を取ると、この直後の match_rule のデコレータがずれて
+        「takes 2 positional arguments but 3 were given」で取り込みが丸ごと落ちる。
+        実際に一度そうなった。
+        """
         best = None
         for r in rules:
             kw = (r.get("keyword") or "").strip()
             if not kw or not r.get("share"):
                 continue
-            if kw in merchant or kw in norm:
+            if kw in merchant:
                 # いちばん長いキーワードを勝たせる(「イオン」より「イオンモール」)
                 if best is None or len(kw) > len(best[0]):
                     best = (kw, r["share"])
         return best[1] if best else None
 
+    @staticmethod
     def match_rule(rules: list[dict], merchant: str) -> str | None:
         """
         辞書 rules と店名 merchant を照合して費目を返す。当たらなければ None。

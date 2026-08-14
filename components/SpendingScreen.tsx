@@ -76,6 +76,14 @@ export function SpendingScreen() {
   const dupPairs = useMemo<DupPair[]>(() => {
     const rows = tx.rows.filter((t) => !t.dup_ok);
     const byAmount = new Map<number, typeof rows>();
+    /*
+     * 【定額のものは、同じ日でなければ疑わない】
+     * ETC の 540円 は19回出る。金額が一致しても何の情報にもならないのに、
+     * 3日以内という条件だけで組が量産される。実データで9組中8組が
+     * ETC の誤検知だった。毎回それを片付けさせると、やがて全部無視される。
+     * よく出る金額は「同じ日」でなければ疑わない。
+     */
+    const RECURRING = 5;
     for (const t of rows) {
       const list = byAmount.get(t.amount) ?? [];
       list.push(t);
@@ -91,7 +99,8 @@ export function SpendingScreen() {
           if (a.source === b.source) continue;
           const days =
             Math.abs(new Date(a.date).getTime() - new Date(b.date).getTime()) / 86400000;
-          if (days <= 3) out.push({ a, b });
+          const often = (byAmount.get(a.amount) ?? []).length >= RECURRING;
+          if (often ? days === 0 : days <= 3) out.push({ a, b });
         }
       }
     }

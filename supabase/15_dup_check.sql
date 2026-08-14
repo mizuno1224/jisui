@@ -57,8 +57,19 @@ join transactions b
   on  b.household_id = a.household_id
   and b.id > a.id                          -- 同じ組を2回出さない
   and b.amount = a.amount
-  and abs(b.date - a.date) <= 3
   and b.source <> a.source
+  and (
+        -- 【定額のものは、同じ日でなければ疑わない】
+        -- ETC の 540円 は19回出る。金額が一致しても情報にならないのに、
+        -- 3日以内という条件だけで組が量産される。実データで9組中8組が
+        -- ETC の誤検知だった。毎回片付けさせると、やがて全部無視される。
+        case
+          when (select count(*) from transactions c
+                 where c.household_id = a.household_id and c.amount = a.amount) >= 5
+          then b.date = a.date
+          else abs(b.date - a.date) <= 3
+        end
+      )
 where a.dup_ok = false
   and b.dup_ok = false;
 
