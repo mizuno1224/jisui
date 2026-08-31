@@ -275,7 +275,80 @@ h = handoff(
 | `add_todo` | `add_todo` の引数そのまま | `j.add_todo(**args)` |
 | `add_rule` | `{"keyword", "category", "note"}` | `j.add_rule(**args)` |
 | `insert` | `{"table": "…", "rows": [...]}` | `j.insert(args["table"], args["rows"])` |
+| `update` | `{"table": "…", "match": {…}, "set": {…}}` | `j.update_rows(args["table"], args["match"], args["set"])` |
+| `add_health` | `{"kind", "date", "member", …}` | `j.add_health(**args)` |
 | `import_card_row` | `{date, amount, merchant_raw, merchant_norm, source, memo}` | 費目を `j.classify` で決めてから `transactions` へ |
+
+### `add_health` — 体重・睡眠・歩数・飲酒を会話から記録する
+
+**入力画面を開かない日をつくらないための入口。**
+「今日7,000歩」「23時に寝て6時起き」「体重62.1」と言われたら、その場で受け渡しにする。
+
+```json
+{ "op": "add_health", "args": { "kind": "活動", "date": "2026-08-31", "member": "夫", "steps": 7000 } }
+{ "op": "add_health", "args": { "kind": "睡眠", "date": "2026-08-31", "member": "妻",
+                                "bedtime": "23:00", "wake_time": "06:00", "rest_feeling": 4 } }
+{ "op": "add_health", "args": { "kind": "体重", "date": "2026-08-31", "member": "夫", "weight_kg": 62.1 } }
+{ "op": "add_health", "args": { "kind": "飲酒", "date": "2026-08-31", "member": "夫", "pure_alcohol_g": 0 } }
+```
+
+| `kind` | 入れられる欄 |
+|---|---|
+| `体重` | `weight_kg` / `body_fat_pct` / `waist_cm` / `bp_systolic` / `bp_diastolic` / `memo` |
+| `睡眠` | `bedtime` / `wake_time` / `rest_feeling`(1〜5) / `memo` |
+| `活動` | `steps` / `active_minutes`(3メッツ以上) / `exercise_minutes` / `strength_training` / `memo` |
+| `飲酒` | `pure_alcohol_g` / `drinks_memo` |
+
+- `member` は **夫 / 妻** のどちらか。省けない
+- `date` は**過ごした日**。睡眠は「23時に寝て6時起き」なら**起きた日**を渡す
+- **同じ日の同じ人は上書き**になる。足し算ではない
+- **`pure_alcohol_g: 0` は「休肝日」という記録。** 飲まなかった日は 0 を明示して入れること。
+  行が無い日は「入れていない日」として扱われ、休肝日には数えられない
+- 純アルコール量 = `量(ml) × 度数(%) × 0.8 / 100`
+  (ビール500ml=20g / 日本酒1合=21.6g / ワイン150ml=14.4g / 焼酎水割り100ml=20g)
+- **睡眠時間は送らない。** `hours` はデータベースが就寝と起床から計算する
+
+**野菜量と塩分は `add_health` で入れない。** レシピの `veg_g` / `salt_g` から
+献立ごとに自動で出る。レシピ側を `update` で埋めること。
+
+```json
+{ "op": "update", "args": { "table": "recipes", "match": { "name": "麻婆豆腐" },
+                            "set": { "veg_g": 60, "salt_g": 2.4, "kcal": 380, "protein_g": 22 } } }
+```
+
+### `update` — 既に入っている行を直す
+
+**事実の訂正はこれで送る。** 使い切った食材を0にする、保管場所を直す、
+献立を中止にする、レシピ本文を差し替える。以前は受け渡しに直す手段が無く、
+すべて人がアプリで1件ずつ、あるいは SQL を手で流していた。
+
+```json
+{ "op": "update",
+  "args": { "table": "inventory",
+            "match": { "name": "小松菜", "location": "野菜" },
+            "set":   { "qty": 0 } } }
+```
+
+| 決まりごと | なぜ |
+|---|---|
+| `match` が当たるのは**ちょうど1行のときだけ** | 0件でも2件以上でも【何もせずに失敗させる】。書く側は Supabase を読めないので、条件が何行に当たるかを知らないまま書いている。取り違えは黙って起きて、あとから原因が残らない |
+| 直せる表は **`inventory` / `meal_plan` / `recipes` / `pantry` / `shopping_list` / `preferences`** だけ | 間違えたときに元の値が消える操作なので、家計簿の金額や世帯の設定は範囲に入れない |
+| `set` に `id` と `household_id` は書けない | 別の行・別の世帯に化ける |
+| **消す操作は無い** | 数量0と `status="中止"` で足りる。消すと受け渡しからは戻せない |
+| `key` の作り方は他と同じ(`op` と `args` の sha256) | 同じ訂正を2回置いても1回しか通らない |
+
+失敗すると `inbox` にファイルが残り、`ファイル名.json.error` に
+「何行に当たったか」と当たった行が書かれる。`match` に列を足して絞り直す。
+
+```json
+{ "op": "update", "args": { "table": "meal_plan",
+    "match": { "date": "2026-08-28", "slot": "夕食" },
+    "set": { "status": "中止" } } }
+
+{ "op": "update", "args": { "table": "recipes",
+    "match": { "name": "麻婆豆腐" },
+    "set": { "card_md": "# 麻婆豆腐\n\n## 基本情報\n…" } } }
+```
 
 `import_card_row` にだけ **費目が入っていない。**
 費目を決めるには分類辞書を読む必要があり、それには接続が要るから。
@@ -690,6 +763,9 @@ j.add_todo(
   ここで次の行を作らない(作ると二重に増える)
 - 完了・未完了は `update_todo` では変えられない。`done_todo` / `reopen_todo` を使う
   (いつ・誰が終わらせたかを一緒に残すため)
+- 本文の欄は `detail`。**`memo` と書いても同じ**ものとして受ける
+  (`add_event` / `add_receipt` / `add_rule` が `memo` なので取り違えやすい)。
+  両方渡したときは `detail` を採る
 
 ### 消す前に見せる
 

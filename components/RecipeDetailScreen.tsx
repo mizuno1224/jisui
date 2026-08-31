@@ -10,7 +10,8 @@ import {
   init as initInventory,
   subscribe as subscribeInventory,
 } from "@/lib/inventory-store";
-import { guessSection, looseMatch } from "@/lib/matching";
+import { guessSection } from "@/lib/matching";
+import { availabilityOf, equipmentTagsOf, type Availability } from "@/lib/recipe-facets";
 import { markCooked } from "@/lib/mutations";
 import { useWakeLock } from "@/lib/use-wake-lock";
 import { addItem as addShoppingItem, findDuplicate } from "@/lib/store";
@@ -18,9 +19,6 @@ import { useTable } from "@/lib/use-table";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
 
 type PantryRow = { id: number; name: string; stock: string };
-
-/** 任意の材料は、無くても料理は成立するので「足りない」とは言わない。 */
-type Availability = "在庫あり" | "常備品" | "足りない" | "任意";
 
 export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
   const recipes = useTable<Recipe>("recipes");
@@ -46,24 +44,20 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
     [ingredients.rows, recipeId],
   );
 
-  /**
+  /*
    * 材料ごとに、家にあるかを見る。
-   * 常備品(調味料など)は買い物リストに載せない決まりなので別扱いにする(設計書5)。
+   *
+   * 【判定は lib/recipe-facets.ts に置いてある】。レシピ一覧の
+   * 「いま作れる」の印と同じものを使う。ここに書き写すと、一覧では
+   * 「いま作れる」なのに開くと「足りない」が出る、という食い違いが起きる。
    */
-  const checked = useMemo(() => {
-    return mine.map((ing) => {
-      // 0個の行は「在庫あり」と数えない。切らしているのに買い物リストへ載らなかった
-      const inStock = inventory.items.some(
-        (inv) => (inv.qty ?? 1) > 0 && looseMatch(inv.name, ing.name),
-      );
-      if (inStock) return { ing, state: "在庫あり" as Availability };
-      const staple = pantry.rows.some(
-        (p) => looseMatch(p.name, ing.name) && p.stock !== "切れた",
-      );
-      if (staple) return { ing, state: "常備品" as Availability };
-      return { ing, state: (ing.optional ? "任意" : "足りない") as Availability };
-    });
-  }, [mine, inventory.items, pantry.rows]);
+  const checked = useMemo(
+    () => mine.map((ing) => ({
+      ing,
+      state: availabilityOf(ing, inventory.items, pantry.rows),
+    })),
+    [mine, inventory.items, pantry.rows],
+  );
 
   const missing = checked.filter((c) => c.state === "足りない" && !c.ing.optional);
 
@@ -150,6 +144,12 @@ export function RecipeDetailScreen({ recipeId }: { recipeId: number }) {
           {recipe.protein && recipe.protein !== "なし" && <Chip>{recipe.protein}</Chip>}
           {recipe.time_min != null && <Chip>約{recipe.time_min}分</Chip>}
           {recipe.freezable && <Chip className="bg-cyan-100 text-cyan-900">冷凍可</Chip>}
+          {/* 一覧の札と同じもの。ここに無いと、絞り込んで開いたときに裏が取れない */}
+          {equipmentTagsOf(recipe).map((e) => (
+            <Chip key={e} className="bg-violet-100 text-violet-900">
+              {e}
+            </Chip>
+          ))}
         </div>
       </header>
 

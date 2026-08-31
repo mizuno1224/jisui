@@ -128,6 +128,19 @@ export type Recipe = {
   source: string | null;
   tags: string | null;
   created_at: string;
+
+  /*
+   * 1人前の栄養(19_health.sql で足した)。
+   *
+   * 【ここが「健康の入力をゼロにする」要】。献立を組んだ時点で、その日の
+   * 野菜量と塩分が自動で出る。食事を細かく記録させない代わりがこれなので、
+   * 埋まっていないレシピが多いほど健康画面の数字は当てにならなくなる。
+   * 埋まっていない日は「まだ献立を確定していない日」として空欄で出す。
+   */
+  veg_g: number | null;
+  salt_g: number | null;
+  kcal: number | null;
+  protein_g: number | null;
 };
 
 export type RecipeIngredient = {

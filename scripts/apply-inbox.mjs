@@ -164,8 +164,13 @@ def apply_one(j, db, op, args, state, review_unknown):
     if op == "add_receipt":
         r = j.add_receipt(**args)
         if r.get("skipped"):
-            return ("すでに同じ 日付・金額・店名 の支出がある(transactions id=%s)"
-                    % r["transaction"]["id"], True)
+            # 【在庫は入っている】ことを必ず言う。ここを黙ると、
+            # 「重複だから何も起きていない」と読まれて在庫を手で入れ直され、
+            # 二重になる。db.py の add_receipt が重複でも在庫を入れるようにした。
+            n = len(r.get("inventory") or [])
+            return ("すでに同じ 日付・金額・店名 の支出がある(transactions id=%s)%s"
+                    % (r["transaction"]["id"],
+                       ("・在庫 %d 件は入れた" % n) if n else "・在庫は無し"), True)
         n = len(r.get("inventory") or [])
         return ("transactions id=%s%s" % (r["transaction"]["id"],
                                           ("・在庫 %d 件" % n) if n else ""), False)
@@ -190,6 +195,28 @@ def apply_one(j, db, op, args, state, review_unknown):
     if op == "insert":
         rows = j.insert(args["table"], args["rows"])
         return ("%s に %d 行" % (args["table"], len(rows)), False)
+
+    if op == "add_health":
+        r = j.add_health(**args)
+        row = r.get("row") or {}
+        bits = ", ".join("%s=%s" % (k, v) for k, v in row.items()
+                         if k not in ("date", "member") and v is not None)
+        return ("%s の %s に %s(%s)" % (args.get("member"), r["table"],
+                                        args.get("date"), bits), False)
+
+    if op == "update":
+        # 既存の行の「事実の訂正」。条件がちょうど1件に当たるときだけ通る。
+        # 0件でも2件以上でも db.py が例外を投げ、Node 側が .error を書く。
+        # 【取り違えは静かに壊れる】ので、当たらないほうを正解に倒してある。
+        patch = args.get("set")
+        if patch is None:
+            patch = args.get("patch")
+        r = j.update_rows(args["table"], args.get("match") or {}, patch or {})
+        changed = r.get("changed") or {}
+        if not changed:
+            return ("%s id=%s はすでにその値だった" % (r["table"], r["id"]), True)
+        bits = ", ".join("%s: %r → %r" % (k, v[0], v[1]) for k, v in changed.items())
+        return ("%s id=%s を直した(%s)" % (r["table"], r["id"], bits), False)
 
     if op == "import_card_row":
         return import_card_row(j, db, args, state, review_unknown)
@@ -449,7 +476,8 @@ function describe(op, args) {
     }
     push(a.memo ? `memo: ${a.memo}` : null);
     push(a.needs_review ? "「重複確認が必要」の印を立てる" : null);
-    push("同じ 日付・金額・店名 が既にあれば入れない(dedup_hash で照合)");
+    push("同じ 日付・金額・店名 の支出が既にあれば、支出は入れない(dedup_hash で照合)");
+    if (inv.length) push("※ 支出が重複でも【在庫は入れる】。買った物が在庫に入らないまま消えるのを防ぐため");
     return {
       title: `レシートを1件入れる: ${a.date} ${a.merchant_raw} ${yen(a.amount)}(${a.category ?? "食費"})`,
       why,
@@ -491,7 +519,9 @@ function describe(op, args) {
     push(a.assignee ? `担当: ${a.assignee}` : null);
     push(a.parent_id != null ? `やること id=${a.parent_id} の子として作る` : null);
     push(a.repeat ? `繰り返し: ${a.repeat}` : null);
-    push(a.detail ? `詳細: ${cut(String(a.detail), 80)}` : null);
+    // memo は detail の別名(db.py の add_todo が受ける)。どちらで書かれても出す。
+    const detail = a.detail ?? a.memo;
+    push(detail ? `詳細: ${cut(String(detail), 80)}` : null);
     if (subs.length) push(`子タスク ${subs.length} 件: ${subs.slice(0, 6).join(" / ")}${subs.length > 6 ? " ほか" : ""}`);
     return { title: `やることを1件足す: ${a.title}`, why };
   }
@@ -509,6 +539,30 @@ function describe(op, args) {
     if (rows.length > 3) push(`・ほか ${rows.length - 3} 行`);
     push("household_id はここで足す(受け渡し JSON には入っていない)");
     return { title: `${a.table} に ${rows.length} 行そのまま入れる`, why };
+  }
+
+  if (op === "add_health") {
+    const skip = new Set(["kind", "date", "member"]);
+    for (const [k, v] of Object.entries(a)) {
+      if (!skip.has(k) && v !== null && v !== undefined) push(`・${k}: ${JSON.stringify(v)}`);
+    }
+    push("同じ日の同じ人は【上書き】になる。足し算ではない");
+    if (a.kind === "飲酒" && a.pure_alcohol_g === 0) push("純アルコール 0 =「休肝日」という記録");
+    return { title: `${a.member}の${a.kind}を記録する: ${a.date}`, why };
+  }
+
+  if (op === "update") {
+    const m = plain(a.match) ? a.match : {};
+    const s = (plain(a.set) ? a.set : plain(a.patch) ? a.patch : {});
+    const where = Object.entries(m)
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+      .join(" かつ ");
+    push(`どの行: ${where || "【条件なし】(そのままでは失敗します)"}`);
+    for (const [k, v] of Object.entries(s)) push(`・${k} → ${cut(JSON.stringify(v), 120)}`);
+    push("条件に当たる行が【ちょうど1件】のときだけ直す。0件でも2件以上でも何もしない");
+    push("直せる表は inventory / meal_plan / recipes / pantry / shopping_list / preferences だけ");
+    push("消す操作は無い。使い切りは数量0、やめた献立は status=中止 で表す");
+    return { title: `${a.table} の行を1つ直す`, why };
   }
 
   if (op === "import_card_row") {

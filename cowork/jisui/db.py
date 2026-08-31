@@ -151,7 +151,7 @@ TIMEOUT = 30
 # 半日ぶんの記録がどこにも届かない事故が起きた。
 # 版番号があれば「いま動いているのはどれか」を1秒で確かめられる。
 # ============================================================
-SKILL_VERSION = "2026-08-14.1"
+SKILL_VERSION = "2026-08-31.1"
 
 
 # つながらないときの受け渡し場所。
@@ -295,6 +295,80 @@ HANDOFF_VERSION = 1
 # ずれると保存が全部弾かれる。うちの冷蔵庫(日立 R-HWC54Y)固有の分け方で、
 # 一般的な食品分類ではない。買い替えたら作り直しになる。
 INVENTORY_LOCATIONS = ("冷蔵", "氷温", "野菜", "冷凍", "常温")
+
+
+# 受け渡し(inbox)から【既存の行を直せる】表。ここに無い表は直せない。
+#
+# 【なぜ許可制なのか】
+# update は insert と違って、間違えたときに元の値が消える。しかも
+# 消えたことは画面に出ない(数量が 1 から 0 になっただけに見える)。
+# 表を絞っておけば、少なくとも家計簿の金額や世帯の設定は巻き込まれない。
+# 増やすときは「取り違えても人が気づけるか」で決めること。
+UPDATABLE_TABLES = (
+    "inventory",        # 使い切った(qty=0)・置き場所の訂正
+    "meal_plan",        # 中止にする
+    "recipes",          # カード本文(card_md)の差し替え
+    "pantry",           # 常備品を切らした
+    "shopping_list",    # 買った・売り場の訂正
+    "preferences",      # 好み・方針の言い直し
+)
+
+# update で書き換えてはいけない列。
+#   id           … 別の行に化ける
+#   household_id … 他所の世帯へ飛ぶ(RLS に弾かれるが、弾かれ方が分かりにくい)
+UPDATE_FORBIDDEN_COLUMNS = ("id", "household_id")
+
+
+# 健康の記録。会話で言われたことを、その場で1行にする入口。
+#
+# 【欄を許可制にする理由】
+# PostgREST は知らない列を送ると 400 を返すが、その文言は
+#   "Could not find the 'step' column of 'activity_log'"
+# で、どの受け渡しのどの欄なのかが出ない。ここで先に弾いて、
+# 使える欄を並べて返すほうが直しやすい。
+#
+# 【1日1行】。19_health.sql の unique(household_id, date, member) に合わせ、
+# 同じ日にもう一度送ったら上書きになる(足し算にはならない)。
+HEALTH_KINDS = {
+    "体重": ("vitals", ("weight_kg", "body_fat_pct", "waist_cm",
+                        "bp_systolic", "bp_diastolic", "memo")),
+    "睡眠": ("sleep_log", ("bedtime", "wake_time", "rest_feeling", "memo")),
+    "活動": ("activity_log", ("steps", "active_minutes", "exercise_minutes",
+                             "strength_training", "memo")),
+    "飲酒": ("alcohol_log", ("pure_alcohol_g", "drinks_memo")),
+}
+
+HEALTH_MEMBERS = ("夫", "妻")
+
+
+def _pgrst_eq(value: Any) -> str:
+    """
+    PostgREST の「= この値」を書く。
+
+    【値を二重引用符で囲ってはいけない】
+    PostgREST の説明には「予約文字を含む値は二重引用符で囲める」とあるが、
+    **うちの Supabase の PostgREST は eq の値から引用符を外さない。**
+    2026-08-30 に本番で実測した:
+
+        name=eq.6Pチーズ      → 2 行
+        name=eq."6Pチーズ"    → 0 行   ← 引用符ごと名前として照合される
+
+    囲うと【必ず0件になる】。update_rows は0件で止まるので壊れはしないが、
+    どんな訂正も通らなくなる。「安全側に倒したつもりで、全部動かない」という
+    いちばん気づきにくい形なので、ここに実測を残す。
+
+    囲わなくても、次の値は全部そのまま通ることを同じ日に確かめた:
+        ( ) , . : " * & % + と全角文字
+    urllib が %エンコードするので、区切りとして読まれることはない。
+
+    None は is.null。文字列の "null" とは区別できないが、
+    そんな名前の食材は無いので気にしない。
+    """
+    if value is None:
+        return "is.null"
+    if isinstance(value, bool):
+        return "is.true" if value else "is.false"
+    return "eq.%s" % value
 
 
 class JisuiError(RuntimeError):
@@ -896,6 +970,111 @@ class Jisui:
         query = urllib.parse.urlencode(filters)
         _request("DELETE", f"{self.url}/rest/v1/{table}?{query}", self._headers())
 
+    def upsert(self, table: str, rows: list[dict], on_conflict: str) -> list[dict]:
+        """
+        あれば上書き、無ければ入れる。**1日1行の表のためにある。**
+
+        PostgREST は POST に Prefer: resolution=merge-duplicates を付けると
+        upsert になる。どの列で「同じ行」と見るかは on_conflict で渡す
+        (その組に unique が無いと 42P10 で落ちる)。
+        """
+        payload = [{"household_id": self.household_id} | row for row in rows]
+        query = urllib.parse.urlencode({"on_conflict": on_conflict})
+        with _capturing(("insert", {"table": table, "rows": rows})):
+            return _request(
+                "POST",
+                f"{self.url}/rest/v1/{table}?{query}",
+                self._headers({"Prefer": "resolution=merge-duplicates,return=representation"}),
+                payload,
+            ) or []
+
+    def update_rows(self, table: str, match: dict, patch: dict) -> dict:
+        """
+        既存の行を1つだけ直す。**受け渡し(inbox)から「事実の訂正」をする入口。**
+
+            j.update_rows("inventory", {"name": "小松菜", "location": "野菜"}, {"qty": 0})
+
+        【1行だけ、を守る理由】
+        受け渡しを書く側(チャット)は Supabase を読めない。id を知らないまま
+        「小松菜を0にして」と書くしかないので、条件は必ず人の言葉になる。
+        その条件が2行に当たったとき、どちらを直すかは書いた側にも分からない。
+        取り違えは【黙って】起きて、あとから見ても原因が残らない。
+        だから 0 件でも 2 件以上でも【何もせずに落とす】。
+        落ちれば apply-inbox.mjs が .error を書き、inbox にファイルが残る。
+        当たらないほうが、間違ったものを直すよりずっと安全である。
+
+        【当ててから id で直す】
+        数えるときの条件と書き換えるときの条件が同じだと、その間に行が
+        増えていたときに2行とも書き換わる。当たった1行の id で書き直す。
+
+        削除は用意していない。数量0や status='中止' で足りているし、
+        消してしまうと受け渡しからは元に戻せない。
+
+        返り値: {"table", "id", "before", "after", "changed": 変わった列だけ}
+        """
+        if table not in UPDATABLE_TABLES:
+            raise JisuiError(
+                "受け渡しから直せる表ではありません: %s\n"
+                "  直せるのは %s。\n"
+                "  ほかの表を直したいときは、増やしてよいかを人に確かめること。"
+                % (table, " / ".join(UPDATABLE_TABLES))
+            )
+        if not isinstance(match, dict) or not match:
+            raise JisuiError(
+                "match が空です。どの行を直すのかが決まりません。\n"
+                '  例: {"name": "小松菜", "location": "野菜"}'
+            )
+        if not isinstance(patch, dict) or not patch:
+            raise JisuiError("set が空です。何を直すのかが決まりません。")
+        for col in UPDATE_FORBIDDEN_COLUMNS:
+            if col in patch:
+                raise JisuiError("set に %s は書けません(別の行に化けます)。" % col)
+        # select(table, select, **filters) の引数名と重なると TypeError になる。
+        # 落ち方が分かりにくいので、ここで理由を言って止める。
+        for col in match:
+            if col in ("table", "select"):
+                raise JisuiError(
+                    "match に列名「%s」は使えません(この道具の引数と重なります)。" % col)
+
+        with _capturing(("update", {"table": table, "match": match, "set": patch})):
+            filters = {col: _pgrst_eq(val) for col, val in match.items()}
+            found = self.select(table, "*", **filters)
+            where = " かつ ".join("%s=%r" % (k, v) for k, v in match.items())
+
+            if not found:
+                raise JisuiError(
+                    "%s に当たる行がありません(%s)。何も直していません。\n"
+                    "  いまの状況.md で名前と場所を確かめてください。\n"
+                    "  表記が1文字でも違うと当たりません(「6Pチーズ」と「6pチーズ」など)。"
+                    % (table, where)
+                )
+            if len(found) > 1:
+                hint = []
+                for r in found[:5]:
+                    bits = ["id=%s" % r.get("id")]
+                    for col in ("name", "item", "date", "slot",
+                                "location", "qty", "status"):
+                        if r.get(col) is not None:
+                            bits.append("%s=%r" % (col, r[col]))
+                    hint.append("    " + " ".join(bits))
+                raise JisuiError(
+                    "%s に %d 行当たりました(%s)。\n"
+                    "  どれを直すか決まらないので何もしていません。\n"
+                    "  match に列を足して1行に絞ってください。当たった行:\n%s%s"
+                    % (table, len(found), where, "\n".join(hint),
+                       "\n    …ほか" if len(found) > 5 else "")
+                )
+
+            before = found[0]
+            got = self.update(table, patch, id="eq.%s" % before["id"])
+            after = got[0] if got else before
+            changed = {
+                k: [before.get(k), after.get(k)]
+                for k in patch if before.get(k) != after.get(k)
+            }
+            return {"table": table, "id": before["id"],
+                    "before": before, "after": after, "changed": changed}
+
     # ------------------------------------------------------- よく使う操作
 
     def context(self) -> dict:
@@ -1377,6 +1556,7 @@ class Jisui:
         repeat: str | None = None,
         subtasks: list[str] | None = None,
         detail: str | None = None,
+        memo: str | None = None,
     ) -> dict:
         """
         やることを足す。子タスクまで一度に作れる。
@@ -1397,6 +1577,17 @@ class Jisui:
         """
         if repeat is not None and repeat not in TODO_REPEATS:
             raise JisuiError(f"repeat は {' / '.join(TODO_REPEATS)} のどれか。受け取った値: {repeat}")
+        # 【memo は detail の別名】
+        # ほかの多くの関数(add_event / add_receipt / add_rule)が memo を使うので、
+        # ここだけ detail なのを取り違えて
+        #   Jisui.add_todo() got an unexpected keyword argument 'memo'
+        # で受け渡しが1ファイル落ちた(2026-08-30)。名前を覚え直させるより
+        # 受けるほうが安い。両方来たら detail を採る(列名そのものだから)。
+        #
+        # 【控えを作る前に寄せること】。あとで寄せると、同じ内容の
+        # {"memo": …} と {"detail": …} が別の鍵になり、二重に入る。
+        if detail is None:
+            detail = memo
         # つながらないとき用の控え。担当を引く select も壁に当たるので、その前から包む。
         _args = {
             "title": title, "due_date": due_date, "assignee": assignee,
@@ -1832,7 +2023,17 @@ class Jisui:
             digest = self.dedup_hash(date, amount, merchant_raw)
             existing = self.select("transactions", "id", dedup_hash=f"eq.{digest}")
             if existing:
-                return {"transaction": existing[0], "skipped": True}
+                # 【重複でも在庫は入れる】
+                # 支出だけ先にアプリから入っていることがある。そのとき
+                # ここで丸ごと return すると、買った品が在庫に【永久に入らない】。
+                # 2026-08-26 に実際に起きた(7点が入らないまま残った)。
+                # add_inventory の docstring が警告している壊れ方そのもの。
+                #
+                # receipt_items は入れない。支出の行はすでにあるので、
+                # 同じ明細がその下に二重に並ぶだけになる。
+                added = self.add_inventory(inventory) if inventory else []
+                return {"transaction": existing[0], "inventory": added,
+                        "skipped": True}
 
             tx = self.insert(
                 "transactions",
@@ -1859,6 +2060,99 @@ class Jisui:
                 )
             added = self.add_inventory(inventory) if inventory else []
             return {"transaction": tx, "inventory": added, "skipped": False}
+
+    # --------------------------------------------------------------- 健康
+
+    def add_health(self, kind: str, date: str, member: str, **values: Any) -> dict:
+        """
+        会話で言われた健康の記録を1行にする。**入力画面を開かない日をつくらない。**
+
+            j.add_health("活動", "2026-08-31", "夫", steps=7000)
+            j.add_health("睡眠", "2026-08-31", "妻", bedtime="23:00", wake_time="06:00")
+            j.add_health("体重", "2026-08-31", "夫", weight_kg=62.1)
+            j.add_health("飲酒", "2026-08-31", "夫", pure_alcohol_g=0)   # 休肝日
+
+        kind は 体重 / 睡眠 / 活動 / 飲酒。
+        date は【起きた日・過ごした日】。睡眠は「23時に寝て6時起き」なら
+        起きた 6時 の日を渡す(アプリと同じ数え方にしてある)。
+
+        【同じ日は上書きになる】。足し算ではない。
+        「今日7,000歩」と言われたあと「やっぱり9,000歩」と言われたら 9,000 になる。
+
+        【純アルコール量の 0 は「休肝日」という記録】。省くのとは違う。
+        飲まなかった日は 0 を明示して入れること。行が無い日は
+        「入れていない日」として数えられ、休肝日には数えない。
+        純アルコール量 = 量(ml) x 度数(%) x 0.8 / 100
+        (ビール500ml=20g / 日本酒1合=21.6g / ワイン150ml=14.4g)
+
+        つながらないときは JisuiOffline。e.handoff() を inbox に置けば残る。
+        """
+        if kind not in HEALTH_KINDS:
+            raise JisuiError(
+                "kind は %s のどれか。受け取った値: %r"
+                % (" / ".join(HEALTH_KINDS), kind)
+            )
+        if member not in HEALTH_MEMBERS:
+            raise JisuiError(
+                "member は %s のどちらか。受け取った値: %r"
+                % (" / ".join(HEALTH_MEMBERS), member)
+            )
+        table, allowed = HEALTH_KINDS[kind]
+        unknown = [k for k in values if k not in allowed]
+        if unknown:
+            raise JisuiError(
+                "%s に入れられない欄です: %s\n  使えるのは %s。"
+                % (kind, ", ".join(unknown), ", ".join(allowed))
+            )
+        # 【空の呼び出しを通さない】。日付と人だけの行が入ると、
+        # 「記録のある日」として数えられて、休肝日や睡眠の集計がずれる。
+        if not values:
+            raise JisuiError("%s に入れる中身がありません。" % kind)
+
+        _args = {"kind": kind, "date": date, "member": member}
+        _args.update(values)
+        with _capturing(("add_health", _args)):
+            row = {"date": date, "member": member}
+            row.update(values)
+            got = self.upsert(table, [row], "household_id,date,member")
+            return {"table": table, "row": got[0] if got else row}
+
+    def health(self) -> dict:
+        """
+        いまの状況.md に書き出すための健康のまとめ。
+
+        【表が無くても落ちない】。19_health.sql をまだ流していないうちに
+        ここで例外を出すと、context() ごと落ちて【いまの状況.md が更新されなくなる】。
+        在庫も献立も止まるので、健康より広い範囲を巻き添えにする。
+        読めなければ「まだ始めていない」と言って返す。
+        """
+        try:
+            return {
+                "ふたりの前提": self.select(
+                    "health_profile", "member,birth_date,sex,height_cm,piroli_status"),
+                "直近の体重": self.select(
+                    "vitals", "date,member,weight_kg", order="date.desc", limit="14"),
+                "直近の睡眠": self.select(
+                    "sleep_log", "date,member,bedtime,wake_time,hours,rest_feeling",
+                    order="date.desc", limit="14"),
+                "直近の活動": self.select(
+                    "activity_log", "date,member,steps,active_minutes,strength_training",
+                    order="date.desc", limit="14"),
+                "直近の飲酒": self.select(
+                    "alcohol_log", "date,member,pure_alcohol_g", order="date.desc", limit="14"),
+                "検診": self.select("screening", "member,kind,last_done_on,next_due_on"),
+            }
+        except JisuiOffline:
+            raise                      # 通信の壁は握りつぶさない。上で受け渡しにする
+        except JisuiError as e:
+            # 【生の URL とエラー本文を渡さない】。これは人が読むファイル
+            # (いまの状況.md)に丸ごと載る。404 の JSON を貼ると、
+            # 読む側は「壊れている」と受け取って献立の相談まで止めてしまう。
+            # 何をすればよいかだけを1行で言う。
+            missing = "health_profile" in str(e) or "PGRST205" in str(e)
+            return {"まだ始めていない":
+                    "supabase/19_health.sql をまだ実行していません"
+                    if missing else "健康の表を読めませんでした(%s)" % str(e)[:80]}
 
     # ------------------------------------------- カード明細 CSV の一括取り込み
 

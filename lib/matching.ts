@@ -72,15 +72,35 @@ const canonicalMap = (() => {
   return map;
 })();
 
+/*
+ * 寄せた結果も覚えておく。
+ *
+ * 下の for は当たらなかったとき【毎回 25 組を舐める】。1件ずつなら誤差だが、
+ * レシピ一覧の「いま作れる」は 27 品 x 材料 x 在庫 の総当たりで呼ぶので、
+ * 同じ「玉ねぎ」を何百回も引き直すことになる。答えは入力だけで決まるので、
+ * normalizeText と同じように覚えておけば済む。
+ */
+const canonicalCache = new Map<string, string>();
+
 function canonical(input: string): string {
+  const hit = canonicalCache.get(input);
+  if (hit !== undefined) return hit;
   const base = normalizeText(input);
   const exact = canonicalMap.get(base);
-  if (exact) return exact;
-  // 「玉ねぎ 1個」のように余分が付いていても寄せる
-  for (const [variant, head] of canonicalMap) {
-    if (variant.length >= 2 && base.includes(variant)) return base.replace(variant, head);
+  let out = base;
+  if (exact) {
+    out = exact;
+  } else {
+    // 「玉ねぎ 1個」のように余分が付いていても寄せる
+    for (const [variant, head] of canonicalMap) {
+      if (variant.length >= 2 && base.includes(variant)) {
+        out = base.replace(variant, head);
+        break;
+      }
+    }
   }
-  return base;
+  canonicalCache.set(input, out);
+  return out;
 }
 
 const normalize = canonical;

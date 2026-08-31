@@ -882,3 +882,145 @@ export async function replaceRecipeIngredients(
   if (error) throw error;
   invalidate("recipe_ingredients");
 }
+
+// ================================================================ 健康
+//
+// 日々の記録は【1日1行】に固定してある(19_health.sql の unique)。
+// 行が増える形にすると「今日の体重」がどれなのか決まらず、グラフが飛ぶ。
+// だから足すのではなく upsert で上書きする。直しも同じ道を通る。
+//
+// 【空の欄で既存の値を消さない】
+// 体重だけ入れ直したときに睡眠や歩数が null で上書きされると、
+// 入れ直すほど記録が減っていく。undefined の欄は送らない。
+
+/** undefined の欄を落とす。null は「消す」という意思なので残す。 */
+function definedOnly<T extends object>(patch: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== undefined),
+  ) as Partial<T>;
+}
+
+async function upsertDaily(
+  table: "vitals" | "sleep_log" | "activity_log" | "alcohol_log",
+  date: string,
+  member: "夫" | "妻",
+  patch: Record<string, unknown>,
+) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from(table)
+    .upsert(
+      { household_id: getSession().householdId, date, member, ...definedOnly(patch) },
+      { onConflict: "household_id,date,member" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate(table);
+}
+
+export const saveVitals = (
+  date: string,
+  member: "夫" | "妻",
+  patch: {
+    weight_kg?: number | null;
+    body_fat_pct?: number | null;
+    waist_cm?: number | null;
+    bp_systolic?: number | null;
+    bp_diastolic?: number | null;
+    memo?: string | null;
+  },
+) => upsertDaily("vitals", date, member, patch);
+
+export const saveSleep = (
+  date: string,
+  member: "夫" | "妻",
+  // hours は生成列。【送ってはいけない】。送ると PostgREST が 428 を返す
+  patch: { bedtime?: string | null; wake_time?: string | null; rest_feeling?: number | null; memo?: string | null },
+) => upsertDaily("sleep_log", date, member, patch);
+
+export const saveActivity = (
+  date: string,
+  member: "夫" | "妻",
+  patch: {
+    steps?: number | null;
+    active_minutes?: number | null;
+    exercise_minutes?: number | null;
+    strength_training?: boolean;
+    memo?: string | null;
+  },
+) => upsertDaily("activity_log", date, member, patch);
+
+export const saveAlcohol = (
+  date: string,
+  member: "夫" | "妻",
+  patch: { pure_alcohol_g?: number; drinks_memo?: string | null },
+) => upsertDaily("alcohol_log", date, member, patch);
+
+export async function saveHealthProfile(
+  member: "夫" | "妻",
+  patch: {
+    birth_date?: string | null;
+    sex?: "男" | "女" | null;
+    height_cm?: number | null;
+    smoking?: string | null;
+    piroli_status?: string | null;
+    memo?: string | null;
+  },
+) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("health_profile")
+    .upsert(
+      {
+        household_id: getSession().householdId,
+        member,
+        ...definedOnly(patch),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "household_id,member" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("health_profile");
+}
+
+/**
+ * 検診を受けた日を入れる。**次回の期限は呼ぶ側が計算して渡す。**
+ *
+ * ここで計算すると、画面に出ている期限と保存される期限が別の場所で
+ * 決まることになる。ずれても誰も気づけないので、lib/health.ts の
+ * nextDueAfter() だけが期限を決める、という形にしてある。
+ */
+export async function saveScreening(
+  member: "夫" | "妻",
+  kind: string,
+  patch: { last_done_on?: string | null; next_due_on?: string | null; result?: string | null; memo?: string | null },
+) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("screening")
+    .upsert(
+      { household_id: getSession().householdId, member, kind, ...definedOnly(patch) },
+      { onConflict: "household_id,member,kind" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("screening");
+}
+
+export async function saveVaccination(
+  member: "夫" | "妻",
+  kind: string,
+  patch: { done_on?: string | null; next_due_on?: string | null; memo?: string | null },
+) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("vaccination")
+    .upsert(
+      { household_id: getSession().householdId, member, kind, ...definedOnly(patch) },
+      { onConflict: "household_id,member,kind" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("vaccination");
+}

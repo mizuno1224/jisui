@@ -12,13 +12,18 @@
 // v15: 在庫の区画を3つ(冷蔵/冷凍/常温)から5つ(冷蔵/氷温/野菜/冷凍/常温)に広げた。
 //      ここを上げないと、古いキャッシュを持った端末が3タブのままになり、
 //      '氷温' や '野菜' の在庫がどのタブにも出ない = 消えたように見える。
-const VERSION = "v22";
+// v23: レシピ一覧に絞り込み(いま作れる/10分以内/器具)と並べ替えを足した。
+//      上げないと、古い画面のまま「いま作れる」の札が出ない端末が残る。
+// v24: 健康タブを足した(下のタブが6つ → 7つ)。ホームを全ジャンルの要約に変えた。
+//      上げないと、古いキャッシュを持った端末はタブが6つのままで、
+//      /health を開いてもホームが描かれる = 健康の機能が丸ごと無いように見える。
+const VERSION = "v24";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
 const DATA_TIMEOUT_MS = 2000;
 
-// タブは6つとも圏外で開けるようにしておく。1つでも欠けると、
+// タブは7つとも圏外で開けるようにしておく。1つでも欠けると、
 // そのタブだけ「/」(ホーム)が出てしまい、壊れたように見える。
 // 買い物リストは "/" ではなく "/shopping"。ここを入れ忘れると、
 // 圏外で買い物タブを押したとき URL は /shopping のままホームが描画される。
@@ -43,6 +48,8 @@ const APP_SHELL = [
   "/spending",
   "/spending/assets",
   "/spending/investments",
+  "/health",
+  "/health/checkups",
   "/help",
   "/manifest.webmanifest",
   "/icons/icon-192.png",

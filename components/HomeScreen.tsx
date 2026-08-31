@@ -3,9 +3,19 @@
 import Link from "next/link";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { daysUntil, todayISO, weekdayOf, WEEKDAY_LABELS } from "@/lib/dates";
+import { currentMonth, daysUntil, todayISO, weekdayOf, WEEKDAY_LABELS, yen } from "@/lib/dates";
 import { occursOn } from "@/lib/event-labels";
 import { tagStyle } from "@/lib/tags";
+import {
+  DEFAULT_TARGETS,
+  SCREENING_PLANS,
+  bmi,
+  bmiState,
+  screeningStatus,
+  type HealthProfile,
+  type Screening,
+  type Vitals,
+} from "@/lib/health";
 import { getServerSnapshot, getSnapshot, init, signOut, subscribe } from "@/lib/store";
 import {
   getServerSnapshot as invServerSnapshot,
@@ -15,12 +25,16 @@ import {
 } from "@/lib/inventory-store";
 import { useTable } from "@/lib/use-table";
 import type {
+  Account,
+  Balance,
+  Budget,
   CalendarEvent,
   CalendarTag,
   Chore,
   ChoreLog,
   MealPlan,
   Todo,
+  Transaction,
 } from "@/lib/types";
 
 /** 期限がこの日数以内なら「もうすぐ切れる」として数える。 */
@@ -30,28 +44,33 @@ const EXPIRY_SOON_DAYS = 3;
  * ホーム。
  *
  * 【何のための画面か】
- * 2つある。
- *   1. 今日1日ぶんを1画面にまとめる。開いてすぐ「今日は何があるか」が分かる。
- *   2. 全部のページへの入口になる。タブは6つしか置けないが、
- *      画面は10以上ある。家事の設定・資産・投資・やること・タグ・使い方は
- *      どのタブの隅にあるか覚えていないと辿り着けなかった。ここに全部並べる。
+ * 3つある。
+ *   1. 今日1日ぶんを1画面にまとめる。開いてすぐ「今日は何があるか」が分かる
+ *   2. **ジャンルごとの一番大事な数字を1つずつ出す。** くらし・健康・お金は
+ *      それぞれ別のタブに分かれていて、行かないと様子が分からなかった。
+ *      「体重を今日まだ入れていない」「検診の期限が過ぎている」
+ *      「今月の支出が予算を超えた」は、行かないと分からないでは遅い
+ *   3. 全部のページへの入口になる。タブは7つしか置けないが画面は15以上ある
  *
- * 【重い集計をしない】
- * 家計の合計や在庫の全件走査はしない。開いた瞬間に出ることを優先する。
- * 詳しく見たい人はタブへ行く。
+ * 【重い集計をしない、という決まりの現在地】
+ * ジャンルの要約を出すために読む表は増えた。本番の実測(2026-08-31)で、
+ *   transactions 250行 24KB(列を5つに絞ったぶん) / accounts 9行 / balances 11行
+ *   todos 104行 49KB / inventory 52行 13KB
+ * もともと読んでいた todos のほうが重い。集計はどれも1回なめるだけで、
+ * 手元のキャッシュを先に描く作りも変えていない。
+ *
+ * **増やすときは列を絞ること。** transactions は select を書かないと
+ * レシート本文まで付いてきて、この画面がいちばん重い画面になる。
  */
 export function HomeScreen() {
   const session = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const today = todayISO();
+  const month = currentMonth();
 
   // 在庫は useTable ではなくストアから読む。
   // useTable が扱えるのは id が数値の表だけで、在庫は一時 id(文字列)を
   // 使うオフライン書き込み対応のため、専用ストアを持っている。
-  const inventorySnapshot = useSyncExternalStore(
-    invSubscribe,
-    invSnapshot,
-    invServerSnapshot,
-  );
+  const inventorySnapshot = useSyncExternalStore(invSubscribe, invSnapshot, invServerSnapshot);
 
   useEffect(() => {
     void init();
@@ -65,10 +84,19 @@ export function HomeScreen() {
   const chores = useTable<Chore>("chores");
   const choreLogs = useTable<ChoreLog>("chore_log");
 
-  const tagById = useMemo(
-    () => new Map(tags.rows.map((t) => [t.id, t])),
-    [tags.rows],
-  );
+  // お金。列を絞る(この画面では金額と費目と振り分けしか要らない)
+  const tx = useTable<Transaction>("transactions", { select: "id,date,amount,category,share" });
+  const budgets = useTable<Budget>("budgets");
+  const accounts = useTable<Account>("accounts");
+  const balances = useTable<Balance>("balances");
+
+  // 健康。ホームでは「今日の体重」と「検診の期限」だけを見る。
+  // 睡眠・活動・飲酒まで読むと表が3つ増えるので、そこは健康タブの仕事にする。
+  const profiles = useTable<HealthProfile>("health_profile");
+  const vitals = useTable<Vitals>("vitals", { select: "id,date,member,weight_kg" });
+  const screenings = useTable<Screening>("screening");
+
+  const tagById = useMemo(() => new Map(tags.rows.map((t) => [t.id, t])), [tags.rows]);
 
   // 繰り返す予定はサーバに1本しか無いので、今日に当たるかここで広げる
   const todayEvents = useMemo(
@@ -114,6 +142,99 @@ export function HomeScreen() {
     return { count: roots.length, overdue };
   }, [todos.rows, today]);
 
+  // ------------------------------------------------------------ お金
+  const money = useMemo(() => {
+    let spent = 0;
+    let unclassified = 0;
+    for (const t of tx.rows) {
+      if (t.date.startsWith(month)) spent += t.amount;
+      // 【未分類は月をまたいで全部数える】。今月ぶんだけ見ると、
+      // 先月の未分類が画面から消えて忘れられる(家計画面と同じ考え方)。
+      if (t.share === "未分類") unclassified += 1;
+    }
+    // その月の上書きがあればそれ、無ければ毎月の既定(year_month が null)
+    const byCategory = new Map<string, number>();
+    for (const b of budgets.rows) {
+      if (b.year_month === null && !byCategory.has(b.category)) byCategory.set(b.category, b.amount);
+      if (b.year_month === month) byCategory.set(b.category, b.amount);
+    }
+    const budget = [...byCategory.values()].reduce((s, v) => s + v, 0);
+    return { spent, unclassified, budget: budget > 0 ? budget : null };
+  }, [tx.rows, budgets.rows, month]);
+
+  // ------------------------------------------------------------ 資産
+  const assets = useMemo(() => {
+    /*
+     * 【一番新しく残高を入れた月で出す】
+     * 今月の残高をまだ入れていない月初に「純資産 0円」と出ると、
+     * 資産が消えたように見える。入っている中で一番新しい月を使い、
+     * その月をラベルに書く(いつの数字なのかが分からないほうが困る)。
+     */
+    /*
+     * 【ローンは差し引かない】。AssetsScreen と同じ規則にする。
+     *
+     * 住んでいる家を資産として記録していないので、家の価値を足さずに
+     * ローンだけ引くと「家を買った瞬間に数千万円損した」という数字になる。
+     * ここで素直に「資産 − 負債」と書くと、ホームと資産画面で
+     * **同じ名前の数字が違う値になる。** 使い方(help-content.ts)にも
+     * 「ローンは純資産に含めていません」と書いてあるので、そちらに合わせる。
+     *
+     * どれをローンとみなすかは分類の文字で決めるところまで同じ。
+     * 片方だけ直すと、また食い違う。
+     */
+    const isLoan = (a: { category: string | null }) => (a.category ?? "").includes("ローン");
+    const countable = new Map(
+      accounts.rows
+        .filter((a) => a.active && !(a.kind === "負債" && isLoan(a)))
+        .map((a) => [a.id, a.kind]),
+    );
+    const months = [...new Set(balances.rows.map((b) => b.year_month))].sort();
+    const latest = months[months.length - 1] ?? null;
+    if (!latest) return { net: null, month: null };
+    let net = 0;
+    for (const b of balances.rows) {
+      if (b.year_month !== latest) continue;
+      const kind = countable.get(b.account_id);
+      if (kind === "資産") net += b.amount;
+      else if (kind === "負債") net -= b.amount;
+    }
+    return { net, month: latest };
+  }, [accounts.rows, balances.rows]);
+
+  // ------------------------------------------------------------ 健康
+  const health = useMemo(() => {
+    /*
+     * BMI の目標帯は lib/health.ts の既定値を使う。
+     * ホームでは health_targets を読まない(表を1つ増やすほどの用が無い)ので、
+     * ここだけ 21〜25 を書き写さないこと。書き写すと、表を直したときに
+     * ホームだけ古い基準で色が付き、健康タブと食い違う。
+     */
+    const band = DEFAULT_TARGETS.bmi;
+    const people = profiles.rows.map((p) => {
+      const todayRow = vitals.rows.find((v) => v.member === p.member && v.date === today);
+      const w = todayRow?.weight_kg != null ? Number(todayRow.weight_kg) : null;
+      const b = bmi(w, p.height_cm != null ? Number(p.height_cm) : null);
+      const judge = bmiState(b, band.min ?? 21, band.max ?? 25);
+      return {
+        member: p.member,
+        weight: w,
+        bmiValue: b,
+        note: w == null ? "今日はまだ" : judge.note,
+        ok: w != null && judge.signal === "満たしている",
+      };
+    });
+    // 期限が近い・過ぎている検診。**ここが健康の機能で一番効くところ**なので、
+    // 健康タブへ行かなくてもホームで気づけるようにする。
+    const due = profiles.rows.flatMap((p) =>
+      SCREENING_PLANS.map((plan) =>
+        screeningStatus(plan, p, screenings.rows.find((s) => s.member === p.member && s.kind === plan.kind), today),
+      )
+        .filter((s) => s.state === "受ける時期" || s.state === "期限が過ぎている")
+        .map((s) => ({ member: p.member, kind: s.plan.kind })),
+    );
+    return { people, due };
+  }, [profiles.rows, vitals.rows, screenings.rows, today]);
+
   const remaining = session.items.filter((i) => i.status === "未購入").length;
   const weekday = WEEKDAY_LABELS[weekdayOf(today)];
 
@@ -147,17 +268,29 @@ export function HomeScreen() {
         </Link>
       )}
 
+      {/* 【一番上に出す】検診の期限は、月単位で遅れても取り返しがつきにくい */}
+      {health.due.length > 0 && (
+        <Link
+          href="/health/checkups"
+          className="mx-4 mt-3 flex items-center justify-between rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:bg-rose-950/50 dark:text-rose-200"
+        >
+          <span className="min-w-0">
+            <b>受ける時期の検診が {health.due.length} 件</b>
+            <span className="block truncate text-xs">
+              {health.due.map((d) => `${d.member}: ${d.kind}`).join(" / ")}
+            </span>
+          </span>
+          <span className="ml-2 shrink-0 font-bold">›</span>
+        </Link>
+      )}
+
       <div className="space-y-3 px-4 pt-3">
+        <GenreLabel>今日</GenreLabel>
+
         {/* ---------------------------------------------- 今日の予定 */}
-        <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-          <Link href="/plan" className="flex items-center justify-between px-4 pt-3.5 pb-1">
-            <h2 className="text-sm font-bold">今日の予定</h2>
-            <span className="text-xs text-neutral-400">カレンダー ›</span>
-          </Link>
+        <Card href="/plan" title="今日の予定" more="カレンダー">
           {todayEvents.length === 0 ? (
-            <p className="px-4 pb-4 text-sm text-neutral-400 dark:text-neutral-600">
-              予定なし
-            </p>
+            <Empty>予定なし</Empty>
           ) : (
             <ul className="px-4 pb-3.5">
               {todayEvents.map((e) => {
@@ -174,36 +307,64 @@ export function HomeScreen() {
               })}
             </ul>
           )}
-        </section>
+        </Card>
 
         {/* ---------------------------------------------- 今日の献立 */}
-        <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-          <Link href="/plan" className="flex items-center justify-between px-4 pt-3.5 pb-1">
-            <h2 className="text-sm font-bold">今日の献立</h2>
-            <span className="text-xs text-neutral-400">決める ›</span>
-          </Link>
+        <Card href="/plan" title="今日の献立" more="決める">
           {todayMeals.length === 0 ? (
-            <p className="px-4 pb-4 text-sm text-neutral-400 dark:text-neutral-600">まだ決めていない</p>
+            <Empty>まだ決めていない</Empty>
           ) : (
             <ul className="px-4 pb-3.5">
               {todayMeals.map((m) => (
                 <li key={m.id} className="flex items-center gap-2 py-1.5 text-sm">
-                  <span className="w-11 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
-                    {m.slot}
-                  </span>
+                  <span className="w-11 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">{m.slot}</span>
                   <span className="truncate">{m.name ?? "(未定)"}</span>
                   {m.status === "実施" && (
-                    <span className="ml-auto shrink-0 text-[10px] font-bold text-emerald-600">
-                      作った
-                    </span>
+                    <span className="ml-auto shrink-0 text-[10px] font-bold text-emerald-600">作った</span>
                   )}
                 </li>
               ))}
             </ul>
           )}
-        </section>
+        </Card>
 
-        {/* ---------------------------------------------- 数字だけのカード */}
+        {/* ---------------------------------------------- 健康 */}
+        <GenreLabel>健康</GenreLabel>
+        <Card href="/health" title="体重" more="健康">
+          {health.people.length === 0 ? (
+            <Empty>
+              まだ始めていません(supabase/19_health.sql を実行すると使えます)
+            </Empty>
+          ) : (
+            <ul className="px-4 pb-3.5">
+              {health.people.map((p) => (
+                <li key={p.member} className="flex items-baseline gap-2 py-1.5">
+                  <span className="w-6 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">{p.member}</span>
+                  <span className="text-lg font-bold tabular-nums">
+                    {p.weight != null ? `${p.weight.toFixed(1)}kg` : "—"}
+                  </span>
+                  {p.bmiValue != null && (
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">BMI {p.bmiValue}</span>
+                  )}
+                  <span
+                    className={`ml-auto shrink-0 text-[11px] ${
+                      p.weight == null
+                        ? "text-neutral-400 dark:text-neutral-500"
+                        : p.ok
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-amber-600 dark:text-amber-400"
+                    }`}
+                  >
+                    {p.note}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        {/* ---------------------------------------------- くらし */}
+        <GenreLabel>くらし</GenreLabel>
         <div className="grid grid-cols-2 gap-3">
           <StatCard
             href="/shopping"
@@ -221,12 +382,8 @@ export function HomeScreen() {
           <StatCard
             href="/plan/chores"
             label="今日の家事"
-            value={
-              todayChores.total === 0 ? "なし" : `${todayChores.done}/${todayChores.total}`
-            }
-            tone={
-              todayChores.total > 0 && todayChores.done < todayChores.total ? "amber" : "plain"
-            }
+            value={todayChores.total === 0 ? "なし" : `${todayChores.done}/${todayChores.total}`}
+            tone={todayChores.total > 0 && todayChores.done < todayChores.total ? "amber" : "plain"}
           />
           <StatCard
             href="/inventory"
@@ -237,16 +394,52 @@ export function HomeScreen() {
           />
         </div>
 
+        {/* ---------------------------------------------- お金 */}
+        <GenreLabel>お金</GenreLabel>
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard
+            href="/spending"
+            label={`${Number(month.slice(5))}月の支出`}
+            value={yen(money.spent)}
+            note={
+              money.budget != null
+                ? money.spent > money.budget
+                  ? `予算を ${yen(money.spent - money.budget)} 超過`
+                  : `予算まで ${yen(money.budget - money.spent)}`
+                : "予算は未設定"
+            }
+            tone={money.budget != null && money.spent > money.budget ? "rose" : "plain"}
+          />
+          <StatCard
+            href="/spending"
+            label="振り分け待ち"
+            value={money.unclassified === 0 ? "なし" : `${money.unclassified} 件`}
+            note={money.unclassified > 0 ? "夫婦/夫/妻 を決める" : undefined}
+            tone={money.unclassified > 0 ? "amber" : "plain"}
+          />
+          <StatCard
+            href="/spending/assets"
+            label="純資産"
+            value={assets.net == null ? "未入力" : yen(assets.net)}
+            // 【いつの数字かを必ず書く】。月初は先月の残高が出ているため
+            note={assets.month ? `${Number(assets.month.slice(5))}月末・ローンは除く` : "残高を入れると出ます"}
+            tone="plain"
+          />
+          <StatCard href="/spending/investments" label="投資" value="保有と監視" note="銘柄の一覧へ" tone="plain" />
+        </div>
+
         {/* ---------------------------------------------- 全ページへの入口 */}
+        <GenreLabel>ほかの画面</GenreLabel>
         <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-          <h2 className="px-4 pt-3.5 pb-1 text-sm font-bold">ほかの画面</h2>
           <ul>
+            <NavRow href="/health" title="健康" desc="体重・睡眠・活動・飲酒。今日と、この7日" />
+            <NavRow href="/health/checkups" title="検診・予防接種" desc="生年月日から次回の期限を出す" />
             <NavRow href="/plan/todos" title="やること" desc="サブタスク・繰り返しつき" />
             <NavRow href="/plan/chores" title="家事の設定" desc="曜日ごと・毎月n日" />
             <NavRow href="/plan/tags" title="予定のタグ" desc="色分けと、非公開の設定" />
             <NavRow href="/spending/assets" title="資産と負債" desc="口座・ローン・給与" />
             <NavRow href="/spending/investments" title="投資" desc="保有銘柄・監視銘柄" />
-            <NavRow href="/recipes" title="レシピ" desc="材料と在庫の突き合わせ" />
+            <NavRow href="/recipes" title="レシピ" desc="いま作れるもの・器具で絞る" />
             <NavRow href="/recipes/ask" title="AIに相談する" desc="献立を相談して、レシピを登録する" />
             <NavRow href="/handoff" title="チャットから取り込む" desc="Cowork の結果を貼り付けて記録する" />
             <NavRow href="/help" title="使い方" desc="困ったときはここ" last />
@@ -265,6 +458,47 @@ export function HomeScreen() {
       </div>
     </main>
   );
+}
+
+/**
+ * ジャンルの見出し。
+ *
+ * カードだけを縦に並べると、どこまでが「今日のこと」でどこからが「お金の話」なのかが
+ * 読み取れず、全部が同じ重さで目に入る。見出しがあると、探しているジャンルまで
+ * 一気に目を飛ばせる。カードそのものより小さく、薄く出すこと(主役はカード)。
+ */
+function GenreLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="px-1 pt-1 text-xs font-bold tracking-wide text-neutral-500 dark:text-neutral-400">
+      {children}
+    </h2>
+  );
+}
+
+function Card({
+  href,
+  title,
+  more,
+  children,
+}: {
+  href: string;
+  title: string;
+  more: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+      <Link href={href} className="flex items-center justify-between px-4 pt-3.5 pb-1">
+        <h3 className="text-sm font-bold">{title}</h3>
+        <span className="text-xs text-neutral-400">{more} ›</span>
+      </Link>
+      {children}
+    </section>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <p className="px-4 pb-4 text-sm text-neutral-400 dark:text-neutral-600">{children}</p>;
 }
 
 /** 数字を1つだけ大きく出すカード。押すとその画面へ飛ぶ。 */
@@ -295,7 +529,8 @@ function StatCard({
       className="flex min-h-[5.5rem] flex-col justify-between rounded-2xl border border-neutral-200 bg-white p-3.5 active:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:active:bg-neutral-800"
     >
       <span className="text-xs text-neutral-500 dark:text-neutral-400">{label}</span>
-      <span className={`text-xl font-bold ${toneClass}`}>{value}</span>
+      {/* 金額は3桁区切りで長くなる。折り返さずに縮めて、カードの高さを揃える */}
+      <span className={`truncate text-xl font-bold tabular-nums ${toneClass}`}>{value}</span>
       {note && (
         <span className="truncate text-[11px] text-neutral-400 dark:text-neutral-500">{note}</span>
       )}

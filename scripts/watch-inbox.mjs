@@ -121,6 +121,22 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 
 // ---------------------------------------------------------------- 取り込み
 
+/*
+ * 【取り込み → 常備品 → 書き出し を、この順で1本に並べる】
+ *
+ * 前は3つを別々に起こしていた。fs.watch は1つのファイルの作成と削除で
+ * 何度も鳴るので、取り込みが走っている最中に書き出しが始まる。
+ * すると【取り込む前の Supabase】を読んだ内容が いまの状況.md に書かれ、
+ * ファイルの更新時刻だけが新しくなる。
+ * 2026-08-26 に実際に起きた(適用ログ 08:41 に対し、いまの状況.md も 08:41
+ * なのに中身が古い)。読む側からは新しいのか古いのか区別が付かない。
+ *
+ * 常備品の補充も書き出しより先に置く。買い物リストへ足したぶんが
+ * 同じ回の いまの状況.md に載るようにするため。
+ *
+ * running が立っている間に呼ばれたら、終わってからもう一度だけ回す(again)。
+ * 何度呼ばれても溜め込まないので、連続で置かれても空回りしない。
+ */
 let running = false;
 let again = false;
 let timer = null;
@@ -135,14 +151,49 @@ function pending() {
   return n;
 }
 
-function apply(why) {
+/** 子プロセスを1つ起こして、終わるまで待つ。出力(標準・エラーの両方)を返す。 */
+function run(args, label) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, { cwd: REPO, windowsHide: true });
+    let out = "";
+    child.stdout.on("data", (b) => (out += b.toString("utf8")));
+    child.stderr.on("data", (b) => (out += b.toString("utf8")));
+    child.on("close", (code) => resolve({ out, code }));
+    child.on("error", (e) => {
+      log(`${label}: 動かせませんでした: ${e.message}`);
+      resolve({ out: "", code: -1 });
+    });
+  });
+}
+
+/**
+ * 取り込み → 常備品 → 書き出し。**必ずこの順で、重ならないように回す。**
+ * 取り込むものが無くても、書き出しだけは通る(アプリ側で在庫を直したぶんが
+ * チャットに伝わるのは、この道しかない)。
+ */
+async function cycle(why) {
   if (running) {
     again = true;
     return;
   }
-  if (pending() === 0) return;
-
   running = true;
+  try {
+    if (pending() > 0) await applyAll(why);
+    await restockStaples(why);
+    // 【いちばん最後】。ここより前に置くと、取り込む前の中身が書かれる。
+    await refreshContext(why);
+  } catch (e) {
+    log(`回している途中で落ちました(${why}): ${e && e.stack ? e.stack : e}`);
+  } finally {
+    running = false;
+    if (again) {
+      again = false;
+      setTimeout(() => void cycle("待っていたぶん"), 500);
+    }
+  }
+}
+
+async function applyAll(why) {
   log(`取り込みます(${why})`);
 
   /*
@@ -163,19 +214,10 @@ function apply(why) {
     (d) => existsSync(d) && readdirSync(d).some((f) => f.endsWith(".json")),
   );
 
-  const done = () => {
-    running = false;
-    if (again) {
-      again = false;
-      setTimeout(() => apply("待っていたぶん"), 500);
-    }
-  };
-
-  const runNext = (i) => {
-    if (i >= dirs.length) return done();
-    const dir = dirs[i];
-    const child = spawn(
-      process.execPath,
+  // 【1つずつ順に】。同時に起こすと同じ控え(applied-keys.json)を
+  // 2つのプロセスが読み書きして、あとから書いたほうが前のぶんを消す。
+  for (const dir of dirs) {
+    const { out, code } = await run(
       [
         join(REPO, "scripts", "apply-inbox.mjs"),
         "--apply",
@@ -183,40 +225,25 @@ function apply(why) {
         `--processed=${PROCESSED}`,
         `--ledger=${LEDGER}`,
       ],
-      { cwd: REPO, windowsHide: true },
+      dir,
     );
-
-    let out = "";
-    child.stdout.on("data", (b) => (out += b.toString("utf8")));
-    child.stderr.on("data", (b) => (out += b.toString("utf8")));
-
-    child.on("close", (code) => {
-      // まとめの行だけ残す。全文を毎回書くとログが読めなくなる。
-      const summary = out
-        .split("\n")
-        .filter((l) => /適用 \d+ 件|❌|失敗|読めません|入りました/.test(l))
-        .slice(0, 12)
-        .join(" / ")
-        .trim();
-      // どの場所のぶんかを必ず書く。書かないと、詰まっている場所が分からない。
-      log(`${dir}: ${summary || `終了(コード ${code})`}`);
-      runNext(i + 1);
-    });
-
-    child.on("error", (e) => {
-      log(`${dir}: 動かせませんでした: ${e.message}`);
-      runNext(i + 1);
-    });
-  };
-
-  runNext(0);
+    // まとめの行だけ残す。全文を毎回書くとログが読めなくなる。
+    const summary = out
+      .split("\n")
+      .filter((l) => /適用 \d+ 件|❌|失敗|読めません|入りました/.test(l))
+      .slice(0, 12)
+      .join(" / ")
+      .trim();
+    // どの場所のぶんかを必ず書く。書かないと、詰まっている場所が分からない。
+    log(`${dir}: ${summary || `終了(コード ${code})`}`);
+  }
 }
 
 function schedule(why) {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
-    apply(why);
+    void cycle(why);
   }, SETTLE_MS);
 }
 
@@ -240,32 +267,14 @@ log("チャットがここに記録を置くと、数秒でアプリに反映さ
  * 取り込みと同じ息づかいで動かすのが自然なので、ここに置く。
  * 中身が変わっていなければ書かないので、空回りしても害は無い。
  */
-// 走っている最中にもう一度呼ばれても、重ねて動かさない。
-// fs.watch はファイル1つの作成と削除で何度も鳴るので、そのままだと
-// 同じ書き出しが並んで走り、Supabase を無駄に叩く。
-let refreshing = false;
-function refreshContext(why) {
-  if (refreshing) return;
-  refreshing = true;
-  const child = spawn(process.execPath, [join(REPO, "scripts", "write-context.mjs")], {
-    cwd: REPO,
-    windowsHide: true,
-  });
-  let out = "";
-  child.stdout.on("data", (b) => (out += b.toString("utf8")));
-  child.stderr.on("data", (b) => (out += b.toString("utf8")));
-  child.on("close", () => {
-    // 【必ず旗を下ろすこと】。下ろし忘れると、二度と書き直せなくなる。
-    // しかも黙って古い中身を出し続けるので、誰も気づけない。
-    refreshing = false;
-    const line = out.trim().split("\n").filter(Boolean).pop();
-    // 「変わっていない」は毎回出るのでログに残さない。ログが読めなくなる。
-    if (line && !line.includes("変わっていない")) log(`いまの状況(${why}): ${line}`);
-  });
-  child.on("error", (e) => {
-    refreshing = false;
-    log(`いまの状況を書けませんでした: ${e.message}`);
-  });
+// 【重ねて動かさないのは cycle() の running が受け持つ】。
+// ここでは待てる形にしておくだけ。旗を2つに分けると、片方だけ下り損ねて
+// 「黙って古い中身を出し続ける」状態になる(前はそうなっていた)。
+async function refreshContext(why) {
+  const { out } = await run([join(REPO, "scripts", "write-context.mjs")], "いまの状況");
+  const line = out.trim().split("\n").filter(Boolean).pop();
+  // 「変わっていない」は毎回出るのでログに残さない。ログが読めなくなる。
+  if (line && !line.includes("変わっていない")) log(`いまの状況(${why}): ${line}`);
 }
 
 /*
@@ -276,36 +285,20 @@ function refreshContext(why) {
  * 灰色の「常備品」の札を出すだけで、買い物リストには出ない。
  * 詳しくは scripts/restock-staples.mjs の頭を読むこと。
  */
-let restocking = false;
-function restockStaples(why) {
-  if (restocking) return;
-  restocking = true;
-  const child = spawn(
-    process.execPath,
+async function restockStaples(why) {
+  const { out } = await run(
     ["--experimental-strip-types", join(REPO, "scripts", "restock-staples.mjs"), "--apply"],
-    { cwd: REPO, windowsHide: true },
+    "常備品",
   );
-  let out = "";
-  child.stdout.on("data", (b) => (out += b.toString("utf8")));
-  child.stderr.on("data", (b) => (out += b.toString("utf8")));
-  child.on("close", () => {
-    restocking = false;
-    // 足したときだけ書く。「0 件」を毎回書くとログが読めなくなる。
-    const line = out.split("\n").find((l) => l.startsWith("足しました:"));
-    if (line) log(`常備品(${why}): ${line}`);
-    const err = out.split("\n").find((l) => l.startsWith("足せませんでした"));
-    if (err) log(`常備品(${why}): ${err}`);
-  });
-  child.on("error", (e) => {
-    restocking = false;
-    log(`常備品を見られませんでした: ${e.message}`);
-  });
+  // 足したときだけ書く。「0 件」を毎回書くとログが読めなくなる。
+  const line = out.split("\n").find((l) => l.startsWith("足しました:"));
+  if (line) log(`常備品(${why}): ${line}`);
+  const err = out.split("\n").find((l) => l.startsWith("足せませんでした"));
+  if (err) log(`常備品(${why}): ${err}`);
 }
 
 // 起動時に1回。パソコンを閉じている間に置かれたぶんを拾う。
-apply("起動時の確認");
-refreshContext("起動時");
-restockStaples("起動時");
+void cycle("起動時");
 
 /*
  * 【黙って死なせない】
@@ -324,7 +317,7 @@ function fallbackToPolling(why) {
   if (fellBack) return;
   fellBack = true;
   log(`${why} 30秒おきに見に行く形に切り替えます。`);
-  setInterval(() => apply("定期の確認"), 30_000);
+  setInterval(() => void cycle("定期の確認"), 30_000);
 }
 
 try {
@@ -351,7 +344,9 @@ try {
         } catch {
           /* もう消えていることがある */
         }
-        refreshContext("チャットからの求め");
+        // 取り込みと同じ列に並べる。別に起こすと、取り込みの途中の
+        // Supabase を読んだ内容が いまの状況.md に書かれる。
+        schedule("チャットからの求め");
         return;
       }
 
@@ -382,12 +377,9 @@ process.on("unhandledRejection", (e) => {
 // あわせて錠に時刻を書き直す。人が「錠の時刻が5分以上前なら死んでいる」と
 // 1行で判定できるようにするため。
 setInterval(() => {
-  apply("念のための確認");
-  // Cowork が読むぶんも、ここで一緒に新しくする。
+  // 取り込み → 常備品 → 書き出し を1本で回す。
   // アプリで在庫をいじったぶんが、遅くとも5分でチャットに伝わる。
-  refreshContext("5分ごと");
-  // 常備品を切らしていないかも、同じ間隔で見る。
-  restockStaples("5分ごと");
+  void cycle("5分ごと");
   try {
     writeFileSync(LOCK, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
   } catch {

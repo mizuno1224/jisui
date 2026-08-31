@@ -31,10 +31,66 @@
 -- 空文字どうしが当たってしまう。1件の記録で、その日の名無しの予定が
 -- まとめて実施になる。空は「当たらない」に倒す。
 --
+-- 【2026-08-30 に本番を実測して分かっていること】
+--   ・関数 cook_matches_plan は【本番に入っている】(PostgREST の rpc で呼べた)
+--   ・同じ名前どうしは True、別の料理は False。判定そのものは正しい
+--   ・ただし次は当たらない:
+--       '豚しゃぶ ポン酢' と '豚しゃぶ　ポン酢'(全角空白) → False
+--       '6Pチーズ和え'   と '6pチーズ和え'(大文字小文字) → False
+--     ↑ この2つを直すために、下の jisui_plain_name を足した
+--   ・**トリガが表に付いているかどうかは、PostgREST からは見えない。**
+--     関数だけあってトリガが無ければ、当たり前だが何も起きない。
+--     supabase/18_check_cook_plan.sql の ① で確かめること。1分で済む。
+--
+-- 【ファイルがあることと、流してあることは別】
+-- このファイルは「置けば効く」ものではない。流していなければ何も起きず、
+-- エラーも出ない。「直したつもりで直っていない」がいちばん起きやすい形なので、
+-- 触ったら必ず 18 を流して目で確かめること。
+--
 -- 実行: Supabase の SQL Editor に貼って実行する。
 --       何度実行してもよい(作り直すだけ。データは動かさない)。
 --       すでに入っているぶんを揃えるのは 13b_backfill_once.sql。
 -- ============================================================
+
+-- ------------------------------------------------------------------
+-- 名前を突き合わせる前に、表記の揺れをならす。
+--
+-- 【なぜ btrim だけでは足りないか】
+-- btrim が落とすのは半角の空白とタブだけ。うちの記録には
+--   ・全角空白(「豚しゃぶ　ポン酢」)
+--   ・全角の括弧と数字(「唐揚げ(2人分)」と「唐揚げ(2人分)」)
+--   ・大文字小文字(「6Pチーズ」と「6pチーズ」)
+-- が普通に混ざる。1文字でもずれると当たらず、**当たらなかったことは
+-- どこにも出ない**。献立が「予定」のまま残るだけなので誰も気づけない。
+--
+-- 【括弧の中身は落とさない】
+-- 「冷奴(きざみしょうが)」と「冷奴(小ねぎ)」が同じものになってしまう。
+-- 揺れを吸収したいのであって、別の料理をまとめたいのではない。
+-- 落とすのは空白だけ、あとは半角に寄せて小文字にするだけに留める。
+--
+-- lib/matching.ts の normalizeText と考え方は同じだが、あちらは
+-- かなカナも寄せる。ここでそこまでやると、別の料理を実施にしてしまう
+-- 危険が上回るのでやらない(取り違えは静かに壊れる)。
+-- ------------------------------------------------------------------
+create or replace function public.jisui_plain_name(p_name text)
+returns text
+language sql immutable
+as $$
+  select nullif(
+    lower(
+      regexp_replace(
+        translate(
+          coalesce(p_name, ''),
+          '０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ（）［］！？：；，．－＋／',
+          '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz()[]!?:;,.-+/'
+        ),
+        '[[:space:]　]', '', 'g'
+      )
+    ),
+    ''
+  );
+$$;
+
 
 -- 当てる条件を1か所に置く。トリガが2つあるので、書き写すと必ずずれる。
 create or replace function public.cook_matches_plan(
@@ -46,9 +102,11 @@ as $$
   select
     (p_cook_recipe is not null and p_plan_recipe = p_cook_recipe)
     or (
-         p_cook_name is not null and p_plan_name is not null
-         and btrim(p_cook_name) <> '' and btrim(p_plan_name) <> ''
-         and btrim(p_plan_name) = btrim(p_cook_name)
+         -- jisui_plain_name は空文字を null にして返す。
+         -- 名前が無い行どうしが当たる事故は、この null で塞がっている。
+         public.jisui_plain_name(p_cook_name) is not null
+         and public.jisui_plain_name(p_cook_name)
+             = public.jisui_plain_name(p_plan_name)
        );
 $$;
 

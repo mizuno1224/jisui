@@ -45,7 +45,13 @@ const PY = `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(SKILL)})
 import db
-sys.stdout.write(json.dumps(db.Jisui().context(), ensure_ascii=True))
+j = db.Jisui()
+ctx = j.context()
+# 健康は context() に混ぜず、別に取る。context() は「献立を考えるための材料」で、
+# そこに健康を足すと、献立の相談のたびに要らない表まで読むことになる。
+# health() は表がまだ無くても落ちない(19_health.sql 前でも書き出しは止まらない)。
+ctx["健康"] = j.health()
+sys.stdout.write(json.dumps(ctx, ensure_ascii=True))
 `;
 
 function fetchContext() {
@@ -73,8 +79,25 @@ function table(rows, cols) {
   return [head, rule, ...body].join("\n") + "\n";
 }
 
+/*
+ * 【数量0の行は一覧から落とす】
+ *
+ * 使い切ったことを「0 の行を足す」形で表しているので、同じ名前で
+ * 0 の行と 1 の行が並ぶ(牛乳 x2、6Pチーズ 0箱と1箱、鶏もも肉 0パックと1パック)。
+ * 読む側には「どっちが本当なのか」としか見えず、献立を組むたびに迷う。
+ *
+ * DB からは消さない(いつ切らしたかは買い物の手がかりになる)。
+ * ここで【表示だけ落とす】。落としたものは下の折りたたみに全部出すので、
+ * 「隠れて分からなくなった」ことにはならない。
+ *
+ * qty が null(数を数えていないもの)は落とさない。0 とは違う。
+ */
+const isEmpty = (r) => r.qty !== null && r.qty !== undefined && Number(r.qty) === 0;
+
 function render(ctx, stamp) {
-  const inv = ctx["在庫"] ?? [];
+  const all = ctx["在庫"] ?? [];
+  const inv = all.filter((r) => !isEmpty(r));
+  const gone = all.filter(isEmpty);
   // 置き場所ごとにまとめる。冷蔵庫の区画そのままなので、扉を開けた順に読める。
   const byLoc = {};
   for (const it of inv) (byLoc[it.location ?? "その他"] ??= []).push(it);
@@ -96,6 +119,11 @@ function render(ctx, stamp) {
 
   out.push("## 冷蔵庫と在庫");
   out.push("");
+  out.push(`いま家にあるもの ${inv.length} 点。**ここに無いものは家に無いと考えてよい。**`);
+  if (gone.length) {
+    out.push(`(切らしているもの ${gone.length} 件は、この節のいちばん下に畳んであります)`);
+  }
+  out.push("");
   for (const loc of locs) {
     out.push(`### ${loc}`);
     out.push("");
@@ -104,6 +132,20 @@ function render(ctx, stamp) {
       ["量", (r) => [nz(r.qty), nz(r.unit)].filter(Boolean).join("")],
       ["期限", (r) => r.expiry],
     ]));
+  }
+
+  if (gone.length) {
+    out.push("<details><summary>切らしているもの(数量0)を見る</summary>");
+    out.push("");
+    out.push("**在庫としては数えないこと。** 使い切った記録として残しているだけ。");
+    out.push("");
+    out.push(table(gone, [
+      ["もの", (r) => r.name],
+      ["場所", (r) => r.location],
+      ["単位", (r) => [nz(r.qty), nz(r.unit)].filter(Boolean).join("")],
+    ]));
+    out.push("</details>");
+    out.push("");
   }
 
   out.push("## これからの献立");
@@ -192,6 +234,64 @@ function render(ctx, stamp) {
       out.push("作った記録の日付や名前を直したときの取り残しの疑い。");
       out.push("**本当に作ったのかを聞くこと。**");
       out.push("");
+    }
+  }
+
+  // ------------------------------------------------------------ 健康
+  //
+  // 【入っていない日を、入っていないと書く】
+  // 0 として書くと「歩いていない」に読めてしまう。記録していないだけの日を
+  // 悪い日として数えると、チャットが要らない心配をする。
+  const 健康 = ctx["健康"] ?? {};
+  if (健康["まだ始めていない"]) {
+    out.push("## 健康");
+    out.push("");
+    out.push(`まだ始めていません(${健康["まだ始めていない"]})。`);
+    out.push("");
+  } else if (健康["ふたりの前提"]) {
+    out.push("## 健康");
+    out.push("");
+    out.push("**体重・睡眠・歩数を会話で言われたら、`add_health` の受け渡しで記録すること。**");
+    out.push("同じ日の同じ人は上書きになります(足し算ではない)。");
+    out.push("");
+    out.push("### ふたりの前提");
+    out.push("");
+    out.push(table(健康["ふたりの前提"], [
+      ["人", (r) => r.member],
+      ["生年月日", (r) => r.birth_date],
+      ["性別", (r) => r.sex],
+      ["身長", (r) => (r.height_cm ? `${r.height_cm}cm` : null)],
+      ["ピロリ菌", (r) => r.piroli_status],
+    ]));
+    out.push("生年月日と身長が空だと、BMI も検診の期限も出ません。");
+    out.push("");
+
+    for (const [見出し, 鍵, 列] of [
+      ["直近の体重", "直近の体重", [["日", (r) => r.date], ["人", (r) => r.member], ["体重", (r) => (r.weight_kg ? `${r.weight_kg}kg` : null)]]],
+      ["直近の睡眠", "直近の睡眠", [["日", (r) => r.date], ["人", (r) => r.member], ["寝た", (r) => (r.bedtime ?? "").slice(0, 5)], ["起きた", (r) => (r.wake_time ?? "").slice(0, 5)], ["時間", (r) => r.hours], ["休養感", (r) => r.rest_feeling]]],
+      ["直近の活動", "直近の活動", [["日", (r) => r.date], ["人", (r) => r.member], ["歩数", (r) => r.steps], ["活動(分)", (r) => r.active_minutes], ["筋トレ", (r) => (r.strength_training ? "した" : "")]]],
+      ["直近の飲酒", "直近の飲酒", [["日", (r) => r.date], ["人", (r) => r.member], ["純アルコール", (r) => `${r.pure_alcohol_g}g`]]],
+    ]) {
+      const rows = 健康[鍵] ?? [];
+      out.push(`### ${見出し}`);
+      out.push("");
+      out.push(table(rows, 列));
+      if (鍵 === "直近の飲酒") {
+        out.push("0g は「休肝日」という記録です。行が無い日は【入れていない日】で、休肝日には数えません。");
+        out.push("");
+      }
+    }
+
+    const 検診 = (健康["検診"] ?? []).filter((r) => r.next_due_on);
+    if (検診.length) {
+      out.push("### 検診");
+      out.push("");
+      out.push(table(検診, [
+        ["人", (r) => r.member],
+        ["何", (r) => r.kind],
+        ["前回", (r) => r.last_done_on],
+        ["次回", (r) => r.next_due_on],
+      ]));
     }
   }
 
