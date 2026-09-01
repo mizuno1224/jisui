@@ -277,6 +277,7 @@ h = handoff(
 | `insert` | `{"table": "…", "rows": [...]}` | `j.insert(args["table"], args["rows"])` |
 | `update` | `{"table": "…", "match": {…}, "set": {…}}` | `j.update_rows(args["table"], args["match"], args["set"])` |
 | `add_health` | `{"kind", "date", "member", …}` | `j.add_health(**args)` |
+| `add_checkup` | `{"member", "date", "kind", "results": [...]}` | **アプリの受け渡し画面だけ**(下記) |
 | `import_card_row` | `{date, amount, merchant_raw, merchant_norm, source, memo}` | 費目を `j.classify` で決めてから `transactions` へ |
 
 ### `add_health` — 体重・睡眠・歩数・飲酒を会話から記録する
@@ -315,6 +316,48 @@ h = handoff(
 { "op": "update", "args": { "table": "recipes", "match": { "name": "麻婆豆腐" },
                             "set": { "veg_g": 60, "salt_g": 2.4, "kcal": 380, "protein_g": 22 } } }
 ```
+
+### `add_checkup` — 健康診断・人間ドック・血液検査の結果を残す
+
+**紙で来た検査票を、そのまま記録に変える口。** 写真や PDF を読んで、
+1回の受診を1件の受け渡しにする。アプリの**健康診断**の画面(`/health/exams`)に、
+年ごとの推移として出る。
+
+```json
+{ "op": "add_checkup",
+  "args": {
+    "member": "夫", "date": "2026-06-09", "kind": "定期健診",
+    "place": "◯◯クリニック", "overall": "A", "finding": "特記なし",
+    "results": [
+      { "item": "LDL-C", "value_num": 109, "unit": "mg/dl", "ref_low": 60, "ref_high": 119 },
+      { "item": "γ-GTP", "value_num": 21, "unit": "IU/l", "ref_high": 50 },
+      { "item": "尿蛋白", "value_text": "(−)", "ref_text": "(−)" }
+    ]
+  } }
+```
+
+| 欄 | 中身 |
+|---|---|
+| `member` | **夫 / 妻**。省けない |
+| `date` / `kind` | 受けた日と種類(定期健診 / 人間ドック / 血液検査 / ABC検診 …)。この2つと `member` で同じ受診かを判定する |
+| `overall` | 総合判定。**検査票の文字をそのまま**(A / B / C1 …)。良し悪しに読み替えない |
+| `results[].value_num` | 数値。推移と前回比はこれだけを見る |
+| `results[].value_text` | `(−)` や `異常なし` のように数値にならない結果 |
+| `results[].ref_low` / `ref_high` / `ref_text` | **検査票に印刷されている基準を写す** |
+| `results[].judge` | 項目ごとの判定(A / B / C …)。書いてあれば入れる |
+
+- **基準を作らない。** 検査票に基準が書かれていない項目は、
+  `ref_*` を空のままにする。アプリは「判定なし」と出す。
+  一般的な基準を当てると、**手元の紙と画面で判定が食い違う**(同じ項目でも機関で基準が違う)
+- **項目名の表記をそろえる。** 推移は名前で突き合わせるので、
+  「γ-GTP」と「γ-GT」が混ざると別の項目として2行に割れる。
+  `lib/checkup.ts` の `ITEM_ORDER` にある表記に合わせること
+- **診断を書かない。**「◯◯の疑い」は `memo` にも入れない。値と基準だけを写す
+- 同じ受診(同じ `member` / `date` / `kind`)は2回入らない。飛ばされる
+
+**この `op` は inbox から流せない。** `scripts/apply-inbox.mjs` は知らない操作として
+失敗する。**アプリの「チャットから取り込む」画面に JSON を貼る**こと
+(検査票は本人の手元にあり、スマホで完結するほうが早い)。
 
 ### `update` — 既に入っている行を直す
 

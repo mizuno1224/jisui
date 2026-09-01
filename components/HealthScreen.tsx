@@ -469,6 +469,24 @@ export function HealthScreen() {
           )}
         </Link>
 
+        {/* ------------------------------------------------ 健康診断
+            検診(これから受ける)とは別に、受けた結果を置く画面への入口。
+            【ここでは中身を読まない】。この画面は既に8つの表を読んでいる。
+            最新の受診を出すために9つ目を足すほどの用は無く、
+            件数と中身は /records と /health/exams が受け持つ。 */}
+        <Link
+          href="/health/exams"
+          className="block overflow-hidden rounded-2xl border border-neutral-200 bg-white active:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900"
+        >
+          <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
+            <h2 className="text-sm font-bold">健康診断</h2>
+            <span className="text-xs text-neutral-400">結果を見る ›</span>
+          </div>
+          <p className="px-4 pb-3.5 text-sm text-neutral-500 dark:text-neutral-400">
+            健診・人間ドック・血液検査の結果と、年ごとの推移
+          </p>
+        </Link>
+
         {/* ------------------------------------------------ 出典 */}
         <details className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
           <summary className="cursor-pointer px-4 py-3.5 text-sm font-bold">

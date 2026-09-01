@@ -226,7 +226,8 @@ Service Worker はアプリ本体をキャッシュしているが、`sw.js` の
 
 ```
 app/                    画面。/ がホーム、/shopping が買い物リスト
-components/             画面部品。BottomNav が6つのタブ
+                        /records が【記録の目録】。どこに何が残っているかの正本
+components/             画面部品。BottomNav が7つのタブ(これ以上増やせない。中に理由)
 lib/store.ts            買い物リストの状態と同期。ここを読めば挙動が分かる
 lib/inventory-store.ts  在庫。store.ts と同じ「まず手元、送信は後追い」
 lib/use-table.ts        読み取り中心のデータ(予定・レシピ・家計)の共通処理
@@ -236,6 +237,9 @@ lib/calendar-window.ts  縦スクロールカレンダーの座標計算
 lib/tags.ts             予定のタグの色。非公開かどうかは DB 側が持つ
 lib/matching.ts         在庫名と材料名のゆるい突き合わせ
 lib/help-content.ts     【使い方の唯一の出どころ】。/help がこれを読む
+lib/health.ts           健康の基準。**数値は公的ガイドラインからだけ取る**
+lib/checkup.ts          健康診断。基準は【検査票に書いてあったもの】を行が持つ
+lib/record-counts.ts    記録の目録の件数。行を読まずに数える(head + count)
 public/sw.js            Service Worker(手書き。画面を変えたら VERSION を上げる)
 
 supabase/               Supabase に流す SQL。番号順に実行する → supabase/README.md

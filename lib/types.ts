@@ -209,6 +209,32 @@ export type Transaction = {
   payer: "夫" | "妻";
 };
 
+/**
+ * レシートの明細(品目1つ)。04_schema_kakeibo.sql の receipt_items。
+ *
+ * 【household_id を持たない】。世帯は transaction_id をたどって決まる(RLS も同じ)。
+ * ここに household_id があるつもりで書き込むと、列が無いと言われて落ちる。
+ */
+export type ReceiptItem = {
+  id: number;
+  transaction_id: number;
+  item: string;
+  price: number | null;
+  /** 在庫に登録したら、その行と結びつく */
+  inventory_id: number | null;
+  registered: boolean;
+};
+
+/** 店名キーワード → 費目 の分類辞書。カード明細を取り込むときに引く。 */
+export type ExpenseRule = {
+  id: number;
+  household_id: string;
+  keyword: string;
+  category: string;
+  note: string | null;
+  created_at: string;
+};
+
 export type Budget = {
   id: number;
   household_id: string;

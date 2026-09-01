@@ -45,6 +45,89 @@ function expiryBadge(expiry: string | null) {
   return { text: `${expiry.slice(5).replace("-", "/")}`, className: "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300" };
 }
 
+/**
+ * 在庫1行。
+ *
+ * 【render の中で作らない】。中で定義すると押すたびに別の部品として作り直され、
+ * +/- の連打が取りこぼされる(eslint の react-hooks/static-components が止める)。
+ */
+function InventoryRow({
+  item,
+  plannedUse,
+  showLocation,
+  onOpen,
+}: {
+  item: InventoryItem;
+  plannedUse: string | null;
+  /** 検索中は場所を跨ぐので、どこにあるかを出さないと役に立たない */
+  showLocation: boolean;
+  onOpen: (item: InventoryItem) => void;
+}) {
+  const badge = expiryBadge(item.expiry);
+  return (
+    <li className="flex min-h-16 items-center gap-2 py-2 pl-4 pr-2">
+      <button type="button" onClick={() => onOpen(item)} className="min-w-0 flex-1 text-left">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span
+            className={`text-[17px] font-semibold leading-tight ${
+              (item.qty ?? 0) === 0 ? "text-neutral-500 dark:text-neutral-400" : ""
+            }`}
+          >
+            {item.name}
+          </span>
+          {showLocation && (
+            <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
+              {item.location}
+            </span>
+          )}
+          {badge && (
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
+              {badge.text}
+            </span>
+          )}
+        </span>
+        {plannedUse && (
+          <span className="mt-0.5 block truncate text-xs text-emerald-700 dark:text-emerald-400">
+            使う予定: {plannedUse}
+          </span>
+        )}
+      </button>
+
+      {/* キーボードを出さずに増減できるようにする(設計書 3-3) */}
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          aria-label={`${item.name}を減らす`}
+          onClick={() => {
+            navigator.vibrate?.(8);
+            void adjustQty(item.id, -1);
+          }}
+          className="flex size-11 items-center justify-center rounded-full bg-neutral-100 text-xl font-bold text-neutral-700 active:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200"
+        >
+          −
+        </button>
+        <span className="w-14 text-center text-sm font-bold tabular-nums">
+          {item.qty ?? "-"}
+          <span className="ml-0.5 text-[11px] font-normal text-neutral-500 dark:text-neutral-400">
+            {item.unit ?? ""}
+          </span>
+        </span>
+        <button
+          type="button"
+          aria-label={`${item.name}を増やす`}
+          onClick={() => {
+            navigator.vibrate?.(8);
+            void adjustQty(item.id, 1);
+          }}
+          className="flex size-11 items-center justify-center rounded-full bg-neutral-100 text-xl font-bold text-neutral-700 active:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200"
+        >
+          ＋
+        </button>
+      </div>
+    </li>
+  );
+}
+
 export function InventoryScreen() {
   const snapshot = useInventory();
   const [tab, setTab] = useState<Location>("冷蔵");
@@ -108,6 +191,20 @@ export function InventoryScreen() {
     return snapshot.items.filter((i) => i.location === tab);
   }, [snapshot.items, tab, query]);
 
+  /*
+   * 【数量0は畳んでおく】
+   *
+   * 使い切ったものは行を消さずに 0 で残している(いつ何を切らしたかが
+   * 買い物の手がかりになるため)。ところが実際には、**あるものより
+   * 無いもののほうが多い**一覧になっていた(2026-09-01 の本番で 在庫22点 / 0の行30点)。
+   * 冷蔵庫の前で「何があるか」を見たいときに、これは邪魔でしかない。
+   *
+   * 消さずに畳む。折りたたみを開けば今までどおり出るし、
+   * ＋ を押せばそのまま買い戻しの記録になる。
+   */
+  const inStock = byLocation.filter((i) => (i.qty ?? 0) > 0);
+  const outOfStock = byLocation.filter((i) => (i.qty ?? 0) === 0);
+
   const soon = snapshot.items.filter(
     (i) => i.expiry && daysUntil(i.expiry) <= 3,
   ).length;
@@ -118,7 +215,7 @@ export function InventoryScreen() {
         title="在庫"
         subtitle={
           <>
-            {snapshot.items.length}
+            {snapshot.items.filter((i) => (i.qty ?? 0) > 0).length}
             <span className="text-base font-medium text-neutral-500 dark:text-neutral-400"> 点</span>
           </>
         }
@@ -171,7 +268,10 @@ export function InventoryScreen() {
           }`}
         >
           {LOCATIONS.map((loc) => {
-            const count = snapshot.items.filter((i) => i.location === loc).length;
+            // 数量0は数えない。タブの数字と一覧の行数が食い違うため
+            const count = snapshot.items.filter(
+              (i) => i.location === loc && (i.qty ?? 0) > 0,
+            ).length;
             return (
               <button
                 key={loc}
@@ -207,7 +307,7 @@ export function InventoryScreen() {
       <LoadNotice
         loading={snapshot.status === "loading"}
         error={snapshot.error}
-        empty={byLocation.length === 0}
+        empty={inStock.length === 0}
         emptyText={
           query.trim()
             ? `「${query.trim()}」は見つかりませんでした。`
@@ -218,83 +318,36 @@ export function InventoryScreen() {
       />
 
       <ul className="mt-3 divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
-        {byLocation.map((item) => {
-          const badge = expiryBadge(item.expiry);
-          const use = plannedUseOf(item.name);
-          return (
-            <li key={String(item.id)} className="flex min-h-16 items-center gap-2 py-2 pl-4 pr-2">
-              <button
-                type="button"
-                onClick={() => setTarget(item)}
-                className="min-w-0 flex-1 text-left"
-              >
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span
-                    className={`text-[17px] font-semibold leading-tight ${
-                      (item.qty ?? 0) === 0 ? "text-neutral-500 dark:text-neutral-400" : ""
-                    }`}
-                  >
-                    {item.name}
-                  </span>
-                  {(item.qty ?? 0) === 0 && (
-                    <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-neutral-600 dark:bg-neutral-700 dark:text-neutral-200">
-                      切らしている
-                    </span>
-                  )}
-                  {/* 検索中は場所を跨ぐので、どこにあるかを出さないと役に立たない */}
-                  {query.trim() && (
-                    <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
-                      {item.location}
-                    </span>
-                  )}
-                  {badge && (
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
-                      {badge.text}
-                    </span>
-                  )}
-                </span>
-                {use && (
-                  <span className="mt-0.5 block truncate text-xs text-emerald-700 dark:text-emerald-400">
-                    使う予定: {use}
-                  </span>
-                )}
-              </button>
-
-              {/* キーボードを出さずに増減できるようにする(設計書 3-3) */}
-              <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  aria-label={`${item.name}を減らす`}
-                  onClick={() => {
-                    navigator.vibrate?.(8);
-                    void adjustQty(item.id, -1);
-                  }}
-                  className="flex size-11 items-center justify-center rounded-full bg-neutral-100 text-xl font-bold text-neutral-700 active:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200"
-                >
-                  −
-                </button>
-                <span className="w-14 text-center text-sm font-bold tabular-nums">
-                  {item.qty ?? "-"}
-                  <span className="ml-0.5 text-[11px] font-normal text-neutral-500 dark:text-neutral-400">
-                    {item.unit ?? ""}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  aria-label={`${item.name}を増やす`}
-                  onClick={() => {
-                    navigator.vibrate?.(8);
-                    void adjustQty(item.id, 1);
-                  }}
-                  className="flex size-11 items-center justify-center rounded-full bg-neutral-100 text-xl font-bold text-neutral-700 active:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200"
-                >
-                  ＋
-                </button>
-              </div>
-            </li>
-          );
-        })}
+        {inStock.map((item) => (
+          <InventoryRow
+            key={String(item.id)}
+            item={item}
+            plannedUse={plannedUseOf(item.name)}
+            showLocation={Boolean(query.trim())}
+            onOpen={setTarget}
+          />
+        ))}
       </ul>
+
+      {/* 切らしているものは畳んでおく。消してはいない(買い物の手がかりとして残す) */}
+      {outOfStock.length > 0 && (
+        <details className="mt-3 border-y border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+          <summary className="cursor-pointer px-4 py-3.5 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+            切らしているもの {outOfStock.length} 件
+          </summary>
+          <ul className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+            {outOfStock.map((item) => (
+              <InventoryRow
+                key={String(item.id)}
+                item={item}
+                plannedUse={plannedUseOf(item.name)}
+                showLocation={Boolean(query.trim())}
+                onOpen={setTarget}
+              />
+            ))}
+          </ul>
+        </details>
+      )}
 
       <button
         type="button"

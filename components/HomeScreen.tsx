@@ -50,7 +50,9 @@ const EXPIRY_SOON_DAYS = 3;
  *      それぞれ別のタブに分かれていて、行かないと様子が分からなかった。
  *      「体重を今日まだ入れていない」「検診の期限が過ぎている」
  *      「今月の支出が予算を超えた」は、行かないと分からないでは遅い
- *   3. 全部のページへの入口になる。タブは7つしか置けないが画面は15以上ある
+ *   3. 記録の目録(/records)への入口になる。タブは7つしか置けないが、
+ *      画面は20近くあり、記録の種類はそれより多い。
+ *      **どこに何が残っているかの一覧は /records が正本。**ここには持たない
  *
  * 【重い集計をしない、という決まりの現在地】
  * ジャンルの要約を出すために読む表は増えた。本番の実測(2026-08-31)で、
@@ -428,18 +430,24 @@ export function HomeScreen() {
           <StatCard href="/spending/investments" label="投資" value="保有と監視" note="銘柄の一覧へ" tone="plain" />
         </div>
 
-        {/* ---------------------------------------------- 全ページへの入口 */}
+        {/*
+          ---------------------------------------------- ほかの画面
+
+          【画面の一覧をここに持たない】
+          以前はここに11行の一覧を置いていた。画面が増えるたびに足す場所が
+          ここと使い方の2か所になり、片方が古くなる。しかもレシートの明細や
+          作った記録のように「入っているのに見る画面が無い」記録は、
+          画面の一覧である以上どこにも出てこなかった。
+          /records に【記録の目録】を作って、そちらを正本にしてある。
+        */}
         <GenreLabel>ほかの画面</GenreLabel>
         <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
           <ul>
-            <NavRow href="/health" title="健康" desc="体重・睡眠・活動・飲酒。今日と、この7日" />
-            <NavRow href="/health/checkups" title="検診・予防接種" desc="生年月日から次回の期限を出す" />
-            <NavRow href="/plan/todos" title="やること" desc="サブタスク・繰り返しつき" />
-            <NavRow href="/plan/chores" title="家事の設定" desc="曜日ごと・毎月n日" />
-            <NavRow href="/plan/tags" title="予定のタグ" desc="色分けと、非公開の設定" />
-            <NavRow href="/spending/assets" title="資産と負債" desc="口座・ローン・給与" />
-            <NavRow href="/spending/investments" title="投資" desc="保有銘柄・監視銘柄" />
-            <NavRow href="/recipes" title="レシピ" desc="いま作れるもの・器具で絞る" />
+            <NavRow
+              href="/records"
+              title="記録"
+              desc="残っている記録の全部。健康診断・作った記録・レシートの明細もここから"
+            />
             <NavRow href="/recipes/ask" title="AIに相談する" desc="献立を相談して、レシピを登録する" />
             <NavRow href="/handoff" title="チャットから取り込む" desc="Cowork の結果を貼り付けて記録する" />
             <NavRow href="/help" title="使い方" desc="困ったときはここ" last />

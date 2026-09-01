@@ -17,7 +17,14 @@
 // v24: 健康タブを足した(下のタブが6つ → 7つ)。ホームを全ジャンルの要約に変えた。
 //      上げないと、古いキャッシュを持った端末はタブが6つのままで、
 //      /health を開いてもホームが描かれる = 健康の機能が丸ごと無いように見える。
-const VERSION = "v24";
+// v25: 記録の目録(/records)を足し、ホームの「ほかの画面」をそこへ寄せた。
+//      健康診断(/health/exams)・作った記録・レシートの明細・台所の決めごと・
+//      費目の決まりが、初めて画面から見られるようになった。
+//      上げないと、古いキャッシュを持った端末はホームに旧い一覧を出したままで、
+//      /records を開いてもホームが描かれる = 増えた画面がどこにも無いように見える。
+//      あわせて在庫の一覧から【数量0の行を畳んだ】。本番では在庫22点に対して
+//      0の行が30点あり、あるものより無いもののほうが多い画面になっていた。
+const VERSION = "v25";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
@@ -50,6 +57,12 @@ const APP_SHELL = [
   "/spending/investments",
   "/health",
   "/health/checkups",
+  "/health/exams",
+  "/records",
+  "/records/cooking",
+  "/records/receipts",
+  "/records/kitchen",
+  "/records/rules",
   "/help",
   "/manifest.webmanifest",
   "/icons/icon-192.png",

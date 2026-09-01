@@ -95,6 +95,10 @@ export function describeRecord(r: HandoffRecord): string {
       return `やること: ${n("title")}`;
     case "add_rule":
       return `分類の決まり: 「${n("keyword")}」→ ${n("category")}`;
+    case "add_checkup": {
+      const results = (a["results"] as unknown as unknown[]) ?? [];
+      return `健康診断: ${n("date")} ${n("member")} ${n("kind")}(${results.length} 項目)`;
+    }
     case "insert": {
       const rows = (a["rows"] as unknown as unknown[]) ?? [];
       return `${n("table")} に ${rows.length} 行`;
@@ -304,6 +308,83 @@ async function applyOne(r: HandoffRecord, householdId: string, supabase: Client)
           .from("todos")
           .insert(subs.map((t) => ({ household_id: householdId, title: t, parent_id: pid })));
         if (kids.error) throw kids.error;
+      }
+      return;
+    }
+
+    /**
+     * 健康診断(健診・人間ドック・血液検査)を1回ぶん入れる。
+     *
+     * 【これだけ専用の op にする理由】
+     * 受診(checkup)と項目(checkup_result)の2つの表にまたがり、
+     * 子は親の id を要る。汎用の insert では「先に親を入れて id を見てから
+     * 子を書く」ができないので、まとめて入れる口をここに作る。
+     *
+     * 【基準値はチャットが検査票から写して送る】
+     * こちらで一般的な基準を当てない。紙と画面で判定が食い違うため
+     * (lib/checkup.ts の頭に理由を書いてある)。
+     */
+    case "add_checkup": {
+      const date = str("date");
+      const member = str("member");
+      const kind = str("kind");
+      if (!date || !member || !kind) throw new Error("date / member / kind のどれかが足りません。");
+
+      // 同じ受診を2回入れない。表にも unique(member, date, kind) がある。
+      const dup = await supabase
+        .from("checkup")
+        .select("id")
+        .eq("household_id", householdId)
+        .eq("member", member)
+        .eq("date", date)
+        .eq("kind", kind)
+        .limit(1);
+      if (dup.error) throw dup.error;
+      if ((dup.data ?? []).length > 0) {
+        throw new SkipError(`${date} の${kind}は既に入っています。直すときは SQL からにしてください`);
+      }
+
+      const head = await supabase
+        .from("checkup")
+        .insert({
+          household_id: householdId,
+          member,
+          date,
+          kind,
+          place: str("place"),
+          overall: str("overall"),
+          finding: str("finding"),
+          memo: str("memo"),
+        })
+        .select("id");
+      if (head.error) throw head.error;
+      const checkupId = head.data?.[0]?.id as number | undefined;
+
+      const results = (a["results"] as Record<string, unknown>[] | undefined) ?? [];
+      if (checkupId && results.length > 0) {
+        const rows = results.map((r, i) => ({
+          checkup_id: checkupId,
+          item: String(r.item ?? ""),
+          value_num: r.value_num == null ? null : Number(r.value_num),
+          value_text: r.value_text == null ? null : String(r.value_text),
+          unit: r.unit == null ? null : String(r.unit),
+          ref_low: r.ref_low == null ? null : Number(r.ref_low),
+          ref_high: r.ref_high == null ? null : Number(r.ref_high),
+          ref_text: r.ref_text == null ? null : String(r.ref_text),
+          judge: r.judge == null ? null : String(r.judge),
+          memo: r.memo == null ? null : String(r.memo),
+          // 検査票に書いてあった順。lib/checkup.ts の並びに無い項目は、この順で後ろに続く
+          sort_order: r.sort_order == null ? i : Number(r.sort_order),
+        }));
+        const ins = await supabase.from("checkup_result").insert(rows);
+        // 【受診だけ入って項目が入らない状態を黙って残さない】。
+        // 次に同じ JSON を貼っても、受診が既にあるので飛ばされてしまう。
+        if (ins.error) {
+          throw new Error(
+            `受診は入りましたが、項目が入りませんでした: ${ins.error.message}。` +
+              `checkup の ${date} ${kind} を消してから、もう一度貼ってください。`,
+          );
+        }
       }
       return;
     }
