@@ -221,9 +221,16 @@ async function applyOne(r: HandoffRecord, householdId: string, supabase: Client)
 
       const items = (a["items"] as { item?: string; price?: number }[] | undefined) ?? [];
       if (txId && items.length > 0) {
+        /*
+         * 【receipt_items に household_id を送らない】
+         * この表は household_id を持たない。世帯は transaction_id をたどって
+         * 決まる(04_schema_kakeibo.sql の RLS もその形)。送ると
+         *   400 PGRST204 "Could not find the 'household_id' column"
+         * で【1行も入らない】。品目つきのレシートが丸ごと落ちる。
+         * checkup_result も同じ形なので、増やすときは気をつけること。
+         */
         const ri = await supabase.from("receipt_items").insert(
           items.map((i) => ({
-            household_id: householdId,
             transaction_id: txId,
             item: i.item ?? "",
             price: i.price ?? null,

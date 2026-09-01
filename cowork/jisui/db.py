@@ -941,7 +941,9 @@ class Jisui:
         # で【1行も入らない】。実際にこれで材料の登録が丸ごと落ちた。
         # 表が増えたときは supabase/01_schema.sql を見て、
         # household_id の無い表をここに足すこと。
-        no_household = {"recipe_ingredients", "households"}
+        #   receipt_items  … transaction_id で取引にぶら下がる
+        #   checkup_result … checkup_id で受診にぶら下がる(20_checkup.sql)
+        no_household = {"recipe_ingredients", "households", "receipt_items", "checkup_result"}
         payload = [
             ({} if table in no_household else {"household_id": self.household_id})
             | {k: row.get(k) for k in keys}
