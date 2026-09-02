@@ -429,6 +429,79 @@ export type WatchHistory = {
   note: string | null;
 };
 
+// --------------------------------------------- 高配当株の候補(21_invest_screen.sql)
+
+/** 絞り込み1回ぶんの見出し。候補とは as_of で繋がる(id では繋がない) */
+export type Screening = {
+  id: number;
+  household_id: string;
+  as_of: string;
+  criteria: string | null;
+  universe: string | null;
+  note: string | null;
+  created_at: string;
+};
+
+/**
+ * 候補1銘柄。数値はチャットが出典つきで入れる素の値で、点数は入っていない。
+ * 総合点は lib/screening.ts が invest_policy の重みで毎回計算する。
+ */
+export type ScreeningCandidate = {
+  id: number;
+  household_id: string;
+  as_of: string;
+  code: string;
+  name: string;
+  market: string | null;
+  sector: string | null;
+  price: number | null;
+  unit_shares: number | null;
+  div_yield: number | null;
+  dividend: number | null;
+  per: number | null;
+  pbr: number | null;
+  payout_ratio: number | null;
+  streak_years: number | null;
+  progressive: boolean | null;
+  year_high: number | null;
+  year_low: number | null;
+  recommended: boolean;
+  rank: number | null;
+  reason: string | null;
+  risk: string | null;
+  source: string | null;
+};
+
+export const DECISIONS = ["買う", "見送る", "保留"] as const;
+export type Decision = (typeof DECISIONS)[number];
+
+/** 人が押した判断。銘柄ごとに最新の1件だけ持つ */
+export type StockDecision = {
+  id: number;
+  household_id: string;
+  code: string;
+  name: string;
+  decision: Decision;
+  target_price: number | null;
+  memo: string | null;
+  decided_at: string;
+  from_as_of: string | null;
+};
+
+/** 並べ替えの基準。1世帯1行。アプリの「基準」から直せる */
+export type InvestPolicy = {
+  id: number;
+  household_id: string;
+  budget_per_stock: number | null;
+  w_yield: number;
+  w_growth: number;
+  w_value: number;
+  w_safety: number;
+  min_yield: number | null;
+  note: string | null;
+  updated_at: string;
+};
+
 export type LoanSchedule = {
   id: number;
   household_id: string;

@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { CandidatesTab } from "@/components/CandidatesTab";
 import { LoadNotice } from "@/components/ScreenHeader";
 import { Sheet } from "@/components/Sheet";
 import { formatDate, yen } from "@/lib/dates";
 import { deleteWatchItem, saveWatchItem } from "@/lib/mutations";
 import { useTable } from "@/lib/use-table";
-import type { Holding, WatchHistory, WatchItem } from "@/lib/types";
+import type { Holding, ScreeningCandidate, WatchHistory, WatchItem } from "@/lib/types";
 
-type Tab = "保有" | "監視";
+type Tab = "保有" | "監視" | "候補";
 
 /**
  * 投資。手元の家計簿アプリから引き継いだ。
@@ -21,6 +22,14 @@ export function InvestmentsScreen() {
   const holdings = useTable<Holding>("holdings", { orderBy: "as_of", ascending: false });
   const watchlist = useTable<WatchItem>("watchlist", { orderBy: "code" });
   const history = useTable<WatchHistory>("watch_history", { orderBy: "as_of", ascending: false });
+  /**
+   * 候補はタブの数字にも使うので、ここで取って CandidatesTab に渡す。
+   * 向こうでもう一度 useTable を呼ぶと、同じ表を2回取りに行くことになる。
+   */
+  const candidates = useTable<ScreeningCandidate>("screening_candidates", {
+    orderBy: "as_of",
+    ascending: false,
+  });
 
   const [tab, setTab] = useState<Tab>("保有");
   const [editing, setEditing] = useState<WatchItem | null>(null);
@@ -50,6 +59,12 @@ export function InvestmentsScreen() {
     () => current.reduce((max, h) => (h.as_of > max ? h.as_of : max), ""),
     [current],
   );
+
+  /** 一番新しい絞り込みの候補が何件か。タブの数字に出す */
+  const latestCandidates = useMemo(() => {
+    const latest = candidates.rows.reduce((max, c) => (c.as_of > max ? c.as_of : max), "");
+    return candidates.rows.filter((c) => c.as_of === latest).length;
+  }, [candidates.rows]);
 
   const byAccount = useMemo(() => {
     const map = new Map<string, Holding[]>();
@@ -96,7 +111,7 @@ export function InvestmentsScreen() {
         </p>
 
         <div className="mt-2 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
-          {(["保有", "監視"] as Tab[]).map((t) => (
+          {(["保有", "監視", "候補"] as Tab[]).map((t) => (
             <button
               key={t}
               type="button"
@@ -109,7 +124,7 @@ export function InvestmentsScreen() {
             >
               {t}
               <span className="ml-1 text-xs font-normal text-neutral-500 dark:text-neutral-400">
-                {t === "保有" ? current.length : watchlist.rows.length}
+                {t === "保有" ? current.length : t === "監視" ? watchlist.rows.length : latestCandidates}
               </span>
             </button>
           ))}
@@ -177,7 +192,7 @@ export function InvestmentsScreen() {
             );
           })}
         </>
-      ) : (
+      ) : tab === "監視" ? (
         <>
           <LoadNotice
             loading={watchlist.loading && watchlist.rows.length === 0}
@@ -264,12 +279,17 @@ export function InvestmentsScreen() {
             </button>
           </div>
         </>
+      ) : (
+        <CandidatesTab candidates={candidates} onError={setError} />
       )}
 
-      <p className="mx-4 mt-6 rounded-xl bg-neutral-100 px-4 py-3 text-[11px] leading-relaxed text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-        保有銘柄と株価の記録は、月に1回 Cowork(チャット)から更新するのが楽です。
-        証券会社の画面を見ながら「NISAの中身を更新して」と頼めば、まとめて書き込めます。
-      </p>
+      {/* 候補タブは自前の説明を持っているので、こちらは出さない */}
+      {tab !== "候補" && (
+        <p className="mx-4 mt-6 rounded-xl bg-neutral-100 px-4 py-3 text-[11px] leading-relaxed text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+          保有銘柄と株価の記録は、月に1回 Cowork(チャット)から更新するのが楽です。
+          証券会社の画面を見ながら「NISAの中身を更新して」と頼めば、まとめて書き込めます。
+        </p>
+      )}
 
       {(adding || editing) && (
         <WatchSheet

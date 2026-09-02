@@ -979,8 +979,22 @@ class Jisui:
         PostgREST は POST に Prefer: resolution=merge-duplicates を付けると
         upsert になる。どの列で「同じ行」と見るかは on_conflict で渡す
         (その組に unique が無いと 42P10 で落ちる)。
+
+        【insert と同じく、全部の行で列をそろえる】
+        一括で送るとき、1行目にあって2行目に無い列があると
+        400 PGRST102 "All object keys must match" で【1行も入らない】。
+        高配当の候補20件のように、拾えた指標が銘柄ごとに違うのは普通なので
+        ここでそろえる。足りないぶんは null(= 分からない)。
         """
-        payload = [{"household_id": self.household_id} | row for row in rows]
+        keys: list[str] = []
+        for row in rows:
+            for k in row:
+                if k not in keys:
+                    keys.append(k)
+        payload = [
+            {"household_id": self.household_id} | {k: row.get(k) for k in keys}
+            for row in rows
+        ]
         query = urllib.parse.urlencode({"on_conflict": on_conflict})
         with _capturing(("insert", {"table": table, "rows": rows})):
             return _request(
@@ -1889,12 +1903,34 @@ class Jisui:
             if key not in latest:
                 latest[key] = row
         as_of = max((r["as_of"] for r in latest.values()), default=None)
+
+        # 候補まわり(21_invest_screen.sql)は、まだ表を作っていない家でも
+        # 投資の全体が読めるように、落ちたら空にして先へ進む。
+        # ここで例外にすると、保有銘柄まで見られなくなる。
+        def _optional(table: str, **kw) -> list[dict]:
+            try:
+                return self.select(table, "*", **kw)
+            except JisuiError:
+                return []
+
+        candidates = _optional("screening_candidates", order="as_of.desc", limit="200")
+        newest = max((c["as_of"] for c in candidates), default=None)
+        policy = _optional("invest_policy")
+
         return {
             "保有銘柄": list(latest.values()),
             "監視銘柄": self.select("watchlist", "*", order="code"),
             "直近の指標": self.select("watch_history", "*", order="as_of.desc", limit="60"),
             "資産の内訳": self.select("asset_details", "*"),
             "時点": as_of,
+            # 【方針は勝手に決めない】候補を出す前に必ずこれを読む。
+            # 1銘柄あたりの上限と4つの重みは、アプリの「基準」で人が決めている。
+            "方針": policy[0] if policy else None,
+            "直近の絞り込み": _optional("screenings", order="as_of.desc", limit="6"),
+            "候補": [c for c in candidates if c["as_of"] == newest],
+            "候補の時点": newest,
+            # 「見送る」にした銘柄を、理由が変わっていないのにまた推さないため。
+            "判断": _optional("stock_decisions", order="code"),
         }
 
     def outlook(self) -> dict:

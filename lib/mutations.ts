@@ -5,9 +5,11 @@
 // 買い物リストや在庫と違い、これらは家の中で使う機能なので、
 // オフライン用の送信待ち行列は持たせていない。通信できないときは
 // その場で失敗を伝えて、後でやり直してもらうほうが分かりやすい。
+import { todayISO } from "./dates";
 import { markStale } from "./table-cache";
 import { getSnapshot as getSession } from "./store";
 import { getSupabase } from "./supabase/client";
+import type { Decision } from "./types";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const signal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
@@ -587,6 +589,120 @@ export async function deleteWatchItem(id: number) {
   const { error } = await supabase.from("watchlist").delete().eq("id", id).abortSignal(signal());
   if (error) throw error;
   invalidate("watchlist");
+}
+
+// ------------------------------------------------ 高配当株の候補と判断
+
+/**
+ * 「買う / 見送る / 保留」を記録する。銘柄ごとに1行を上書きする。
+ *
+ * 履歴を積まないのは、次に一覧を開いたときに知りたいのが
+ * 「いま自分はこれをどう思っているか」だけだから(21_invest_screen.sql)。
+ */
+export async function saveDecision(input: {
+  code: string;
+  name: string;
+  decision: Decision;
+  targetPrice?: number | null;
+  memo?: string | null;
+  fromAsOf?: string | null;
+}) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("stock_decisions")
+    .upsert(
+      {
+        household_id: getSession().householdId,
+        code: input.code,
+        name: input.name,
+        decision: input.decision,
+        target_price: input.targetPrice ?? null,
+        memo: input.memo ?? null,
+        decided_at: todayISO(),
+        from_as_of: input.fromAsOf ?? null,
+      },
+      { onConflict: "household_id,code" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("stock_decisions");
+}
+
+export async function deleteDecision(id: number) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("stock_decisions")
+    .delete()
+    .eq("id", id)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("stock_decisions");
+}
+
+/** 並べ替えの基準(予算と4つの重み)。1世帯1行を上書きする */
+export async function saveInvestPolicy(patch: {
+  budget_per_stock?: number | null;
+  w_yield?: number;
+  w_growth?: number;
+  w_value?: number;
+  w_safety?: number;
+  min_yield?: number | null;
+  note?: string | null;
+}) {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("invest_policy")
+    .upsert(
+      {
+        household_id: getSession().householdId,
+        ...definedOnly(patch),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "household_id" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("invest_policy");
+}
+
+/**
+ * 買った株を保有に入れる。
+ *
+ * **評価額や損益はここで作らない。** 買った直後は取得額と同じなので、
+ * それらしい数字を入れられてしまうが、翌日には嘘になる。
+ * 評価額は月1回チャットが証券会社の画面から入れ直す列であり、
+ * ここで埋めると「更新されている」ように見えてしまう(holdings.value)。
+ */
+export async function addHolding(input: {
+  account: string;
+  code: string | null;
+  name: string;
+  quantity: number;
+  acqPrice: number;
+  kind?: string;
+}) {
+  const supabase = requireClient();
+  const acqAmount = Math.round(input.quantity * input.acqPrice);
+  const { error } = await supabase
+    .from("holdings")
+    .upsert(
+      {
+        household_id: getSession().householdId,
+        as_of: todayISO(),
+        kind: input.kind ?? "株式",
+        account: input.account,
+        code: input.code,
+        name: input.name,
+        quantity: input.quantity,
+        acq_price: input.acqPrice,
+        acq_amount: acqAmount,
+        accumulating: false,
+      },
+      { onConflict: "household_id,as_of,account,name" },
+    )
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("holdings");
 }
 
 // -------------------------------------------------------------- 予定のタグ
