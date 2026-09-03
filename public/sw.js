@@ -30,7 +30,10 @@
 //      行ごと押せるようにし(高さ48px)、献立からレシピへ直接飛ぶようにした。
 //      レシピ一覧に「今日つくる」の絞り込みを足し、分類の札を実データから作るようにした
 //      (0件の「麺・丼」「弁当おかず」が出て、4品ある「主食」が出ていなかった)。
-const VERSION = "v27";
+// v28: 投資のまとめ(/spending/investments/summary)を足した。
+//      方針.md の IPS に書いた線(FANG+15%キャップ・恒常積立・押し目ルール)と、
+//      記録した数字を突き合わせる画面。売買はすすめない。
+const VERSION = "v28";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
@@ -61,6 +64,7 @@ const APP_SHELL = [
   "/spending",
   "/spending/assets",
   "/spending/investments",
+  "/spending/investments/summary",
   "/health",
   "/health/checkups",
   "/health/exams",

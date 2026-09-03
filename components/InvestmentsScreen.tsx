@@ -116,6 +116,20 @@ export function InvestmentsScreen() {
         </div>
       </header>
 
+      {/* まとめ画面への入口。方針との突き合わせはあちらが受け持つ */}
+      <Link
+        href="/spending/investments/summary"
+        className="mx-4 mt-3 flex items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm active:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900 dark:active:bg-neutral-800"
+      >
+        <span>
+          <b>まとめ</b>
+          <span className="block text-[11px] text-neutral-500 dark:text-neutral-400">
+            配分・FANG+の割合・押し目ルールを方針と突き合わせる
+          </span>
+        </span>
+        <span className="text-neutral-300 dark:text-neutral-600">›</span>
+      </Link>
+
       {error && (
         <p className="mx-4 mt-3 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:bg-rose-950/50 dark:text-rose-300">
           {error}

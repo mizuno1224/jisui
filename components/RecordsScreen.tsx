@@ -74,6 +74,7 @@ const CATALOG: { group: string; note?: string; entries: Entry[] }[] = [
       { title: "費目の決まり", table: "expense_rules", href: "/records/rules", desc: "店名から費目を決める辞書。取り込みのときに引く" },
       { title: "資産と負債", table: "balances", href: "/spending/assets", desc: "口座の残高・ローン・給与", unit: "月ごとの残高" },
       { title: "投資", table: "holdings", href: "/spending/investments", desc: "保有銘柄と監視銘柄" },
+      { title: "投資のまとめ", table: "watchlist", href: "/spending/investments/summary", desc: "配分・FANG+の割合・押し目ルールを方針と突き合わせる", unit: "監視銘柄" },
     ],
   },
 ];
