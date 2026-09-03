@@ -84,6 +84,12 @@ export function InvestmentSummaryScreen() {
     return { amount: sum, month: latest };
   }, [accounts.rows, balances.rows]);
 
+  /** 表は評価額の大きい順。口座ごとの内訳は /spending/investments が持っている */
+  const sortedHoldings = useMemo(
+    () => [...current].sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0)),
+    [current],
+  );
+
   const fang = totals.buckets.find((b) => b.bucket === "FANG+")?.amount ?? 0;
   const fangOfInvest = share(fang, totals.value);
   const fangOfAll = share(fang, totals.value + cash.amount);
@@ -186,6 +192,148 @@ export function InvestmentSummaryScreen() {
           </ul>
         </section>
 
+        {/* ------------------------------------------------ 保有銘柄の表 */}
+        <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+          <h2 className="px-4 pt-3.5 text-sm font-bold">保有銘柄</h2>
+          <p className="px-4 pb-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+            評価額の大きい順。横にスクロールできます
+          </p>
+          {/* 【表だけを横に流す】。ページごと横に動くと、縦に読むときに指が滑る */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[36rem] border-collapse text-[13px]">
+              <thead>
+                <tr className="border-y border-neutral-100 text-[11px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                  <th className="sticky left-0 bg-white px-4 py-2 text-left font-medium dark:bg-neutral-900">
+                    銘柄
+                  </th>
+                  <th className="px-2 py-2 text-left font-medium">口座</th>
+                  <th className="px-2 py-2 text-right font-medium">評価額</th>
+                  <th className="px-2 py-2 text-right font-medium">損益</th>
+                  <th className="px-3 py-2 text-right font-medium">比率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedHoldings.map((h) => {
+                  const pnl = Number(h.value ?? 0) - Number(h.acq_amount ?? 0);
+                  return (
+                    <tr
+                      key={`${h.account}|${h.name}`}
+                      className="border-b border-neutral-100 dark:border-neutral-800"
+                    >
+                      <th className="sticky left-0 max-w-[11rem] truncate bg-white px-4 py-2 text-left font-medium dark:bg-neutral-900">
+                        <span
+                          className={`mr-1.5 inline-block size-2 rounded-full align-middle ${BUCKET_STYLE[bucketOf(h)].bar}`}
+                        />
+                        {h.name}
+                      </th>
+                      <td className="whitespace-nowrap px-2 py-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {h.account}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums">{yen(Number(h.value ?? 0))}</td>
+                      <td
+                        className={`px-2 py-2 text-right tabular-nums ${
+                          pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600"
+                        }`}
+                      >
+                        {pnl >= 0 ? "+" : ""}
+                        {yen(pnl)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                        {share(Number(h.value ?? 0), totals.value)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="bg-neutral-50 font-bold dark:bg-neutral-800">
+                  <th className="sticky left-0 bg-neutral-50 px-4 py-2 text-left dark:bg-neutral-800">
+                    合計
+                  </th>
+                  <td />
+                  <td className="px-2 py-2 text-right tabular-nums">{yen(totals.value)}</td>
+                  <td
+                    className={`px-2 py-2 text-right tabular-nums ${
+                      totals.pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600"
+                    }`}
+                  >
+                    {totals.pnl >= 0 ? "+" : ""}
+                    {yen(totals.pnl)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">100%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------ 監視銘柄の表 */}
+        <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+          <h2 className="px-4 pt-3.5 text-sm font-bold">監視銘柄</h2>
+          <p className="px-4 pb-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+            年初来レンジ位置の低い順。0%が安値・100%が高値。
+            <b className="text-emerald-700 dark:text-emerald-400">
+              緑は押し目ルール({IPS.dipRangePct}%以下)
+            </b>
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[38rem] border-collapse text-[13px]">
+              <thead>
+                <tr className="border-y border-neutral-100 text-[11px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                  <th className="sticky left-0 bg-white px-4 py-2 text-left font-medium dark:bg-neutral-900">
+                    銘柄
+                  </th>
+                  <th className="px-2 py-2 text-right font-medium">株価</th>
+                  <th className="px-2 py-2 text-right font-medium">レンジ</th>
+                  <th className="px-2 py-2 text-right font-medium">利回り</th>
+                  <th className="px-2 py-2 text-right font-medium">PER</th>
+                  <th className="px-2 py-2 text-right font-medium">PBR</th>
+                  <th className="px-3 py-2 text-right font-medium">記録日</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dips.map(({ watch, hist, pos }) => {
+                  const hit = (pos ?? 100) <= IPS.dipRangePct;
+                  return (
+                    <tr key={watch.id} className="border-b border-neutral-100 dark:border-neutral-800">
+                      <th className="sticky left-0 max-w-[10rem] truncate bg-white px-4 py-2 text-left font-medium dark:bg-neutral-900">
+                        <span className="mr-1 text-[10px] font-normal text-neutral-400">{watch.code}</span>
+                        {watch.name}
+                      </th>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {hist?.price != null ? Number(hist.price).toLocaleString("ja-JP") : "—"}
+                      </td>
+                      <td
+                        className={`px-2 py-2 text-right font-bold tabular-nums ${
+                          hit ? "text-emerald-700 dark:text-emerald-400" : ""
+                        }`}
+                      >
+                        {pos}%
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {hist?.div_yield != null ? `${Number(hist.div_yield)}%` : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                        {hist?.per != null ? Number(hist.per) : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                        {hist?.pbr != null ? Number(hist.pbr) : "—"}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {hist ? formatDate(hist.as_of) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {oldest && (
+            <p className="px-4 py-2.5 text-[11px] text-amber-700 dark:text-amber-400">
+              いちばん新しい株価の記録が {formatDate(oldest)}({daysOld(oldest, today)}日前)です。
+              <b>株価は自動で入りません。</b>古い数字で判断しないこと
+            </p>
+          )}
+        </section>
+
         {/* ------------------------------------------------ 方針との照らし合わせ */}
         <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
           <h2 className="px-4 pt-3.5 text-sm font-bold">方針との照らし合わせ</h2>
@@ -255,37 +403,13 @@ export function InvestmentSummaryScreen() {
               0% が年初来安値、100% が高値。<b>減配していないことは自分で確かめてください</b>
               (この記録には配当の推移が入っていません)。
             </p>
-            <ul className="mt-2">
-              {dips.slice(0, 8).map(({ watch, hist, pos }) => {
-                const hit = (pos ?? 100) <= IPS.dipRangePct;
-                return (
-                  <li key={watch.id} className="flex items-baseline gap-2 py-1">
-                    <span className="w-10 shrink-0 text-[11px] tabular-nums text-neutral-500">
-                      {watch.code}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-sm">{watch.name}</span>
-                    {hist?.div_yield != null && (
-                      <span className="shrink-0 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
-                        利回り {Number(hist.div_yield)}%
-                      </span>
-                    )}
-                    <span
-                      className={`w-12 shrink-0 text-right text-sm font-bold tabular-nums ${
-                        hit ? "text-emerald-700 dark:text-emerald-400" : ""
-                      }`}
-                    >
-                      {pos}%
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {oldest && (
-              <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
-                いちばん新しい株価の記録が {formatDate(oldest)}({daysOld(oldest, today)}日前)です。
-                <b>株価は自動で入りません。</b>古い数字で判断しないこと
-              </p>
-            )}
+            <p className="mt-2 text-xs">
+              いま当たっているのは{" "}
+              <b className="text-emerald-700 dark:text-emerald-400">
+                {dips.filter((d) => (d.pos ?? 100) <= IPS.dipRangePct).length} 銘柄
+              </b>
+              (上の「監視銘柄」の表で緑になっているもの)。
+            </p>
           </div>
         </section>
 

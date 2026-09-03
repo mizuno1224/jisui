@@ -33,7 +33,9 @@
 // v28: 投資のまとめ(/spending/investments/summary)を足した。
 //      方針.md の IPS に書いた線(FANG+15%キャップ・恒常積立・押し目ルール)と、
 //      記録した数字を突き合わせる画面。売買はすすめない。
-const VERSION = "v28";
+// v29: 投資のまとめに【表】を足した。保有銘柄(銘柄・口座・評価額・損益・比率)と
+//      監視銘柄(株価・レンジ位置・利回り・PER・PBR・記録日)。横スクロールする。
+const VERSION = "v29";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
