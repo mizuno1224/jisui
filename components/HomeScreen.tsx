@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { currentMonth, daysUntil, todayISO, weekdayOf, WEEKDAY_LABELS, yen } from "@/lib/dates";
+import { addDays, currentMonth, daysUntil, todayISO, weekdayOf, WEEKDAY_LABELS, yen } from "@/lib/dates";
 import { occursOn } from "@/lib/event-labels";
 import { tagStyle } from "@/lib/tags";
+import { missingByRecipe } from "@/lib/recipe-facets";
 import {
   DEFAULT_TARGETS,
   SCREENING_PLANS,
@@ -32,7 +33,11 @@ import type {
   CalendarTag,
   Chore,
   ChoreLog,
+  CookLog,
   MealPlan,
+  Pantry,
+  Recipe,
+  RecipeIngredient,
   Todo,
   Transaction,
 } from "@/lib/types";
@@ -85,6 +90,19 @@ export function HomeScreen() {
   const todos = useTable<Todo>("todos");
   const chores = useTable<Chore>("chores");
   const choreLogs = useTable<ChoreLog>("chore_log");
+
+  /*
+   * 今日の候補を出すための表。
+   *
+   * 【recipes は列を絞る】。card_md はレシピ1品で1〜3KB あり、
+   * 全部読むとこの画面だけで 80KB を超える。ここで要るのは名前と時間だけ。
+   * recipe_ingredients(約300行)・pantry(43行)・cook_log(20行前後)は
+   * どれも小さい。実測でいちばん重いのは今も todos(49KB)のまま。
+   */
+  const recipes = useTable<Recipe>("recipes", { select: "id,name,time_min,category" });
+  const ingredients = useTable<RecipeIngredient>("recipe_ingredients");
+  const pantry = useTable<Pantry>("pantry", { select: "id,name,stock" });
+  const cookLogs = useTable<CookLog>("cook_log", { select: "id,date,recipe_id,name" });
 
   // お金。列を絞る(この画面では金額と費目と振り分けしか要らない)
   const tx = useTable<Transaction>("transactions", { select: "id,date,amount,category,share" });
@@ -237,6 +255,36 @@ export function HomeScreen() {
     return { people, due };
   }, [profiles.rows, vitals.rows, screenings.rows, today]);
 
+  /**
+   * 今日の候補。
+   *
+   * 【3つの条件で絞る】
+   *   1. いまの在庫と常備品だけで作れる(買い物に行かずに済む)
+   *   2. 直近14日に作っていない(同じものが続かない)
+   *   3. **短い順**に出す。本人の指示で時短を優先する
+   *
+   * 材料が1行も登録されていないレシピは候補にしない。
+   * 「作れる」とも「足りない」とも言えないものを勧めると、台所で分かる。
+   */
+  const candidates = useMemo(() => {
+    const shortfall = missingByRecipe(ingredients.rows, inventorySnapshot.items, pantry.rows);
+    const since = addDays(today, -14);
+    const recent = new Set(
+      cookLogs.rows
+        .filter((l) => l.date >= since)
+        .flatMap((l) => [l.recipe_id != null ? `id:${l.recipe_id}` : null, l.name ? `name:${l.name}` : null])
+        .filter((k): k is string => k !== null),
+    );
+    return recipes.rows
+      .filter((r) => {
+        const s = shortfall.get(r.id);
+        if (!s || s.total === 0 || s.missing > 0) return false;
+        return !recent.has(`id:${r.id}`) && !recent.has(`name:${r.name}`);
+      })
+      .sort((a, b) => (a.time_min ?? 999) - (b.time_min ?? 999))
+      .slice(0, 3);
+  }, [recipes.rows, ingredients.rows, pantry.rows, cookLogs.rows, inventorySnapshot.items, today]);
+
   const remaining = session.items.filter((i) => i.status === "未購入").length;
   const weekday = WEEKDAY_LABELS[weekdayOf(today)];
 
@@ -324,6 +372,33 @@ export function HomeScreen() {
                   {m.status === "実施" && (
                     <span className="ml-auto shrink-0 text-[10px] font-bold text-emerald-600">作った</span>
                   )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        {/* ---------------------------------------------- 今日の候補 */}
+        <Card href="/recipes" title="今日の候補" more="レシピ">
+          {candidates.length === 0 ? (
+            <Empty>
+              いまの在庫だけで作れて、この2週間に作っていないものはありません
+            </Empty>
+          ) : (
+            <ul className="px-4 pb-3.5">
+              {candidates.map((r) => (
+                <li key={r.id} className="flex items-center gap-2 py-1.5">
+                  <Link href={`/recipes/${r.id}`} className="min-w-0 flex-1 truncate text-sm">
+                    {r.name}
+                  </Link>
+                  {r.time_min != null && (
+                    <span className="shrink-0 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                      {r.time_min}分
+                    </span>
+                  )}
+                  <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+                    いま作れる
+                  </span>
                 </li>
               ))}
             </ul>

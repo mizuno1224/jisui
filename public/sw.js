@@ -24,7 +24,9 @@
 //      /records を開いてもホームが描かれる = 増えた画面がどこにも無いように見える。
 //      あわせて在庫の一覧から【数量0の行を畳んだ】。本番では在庫22点に対して
 //      0の行が30点あり、あるものより無いもののほうが多い画面になっていた。
-const VERSION = "v25";
+// v26: ホームに「今日の候補」を足した(いま作れる・14日以内に作っていない・短い順)。
+//      上げないと、古いキャッシュを持った端末にはこの欄が出ない。
+const VERSION = "v26";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;
