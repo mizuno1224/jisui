@@ -342,16 +342,23 @@ export function HomeScreen() {
           {todayEvents.length === 0 ? (
             <Empty>予定なし</Empty>
           ) : (
-            <ul className="px-4 pb-3.5">
+            <ul className="pb-2">
               {todayEvents.map((e) => {
                 const style = tagStyle(tagById.get(e.tag_id ?? -1), e.label);
                 return (
-                  <li key={e.id} className="flex items-center gap-2 py-1.5">
-                    <span className={`size-2.5 shrink-0 rounded-full ${style.bar}`} />
-                    <span className="w-11 shrink-0 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                      {e.start_time ? e.start_time.slice(0, 5) : "終日"}
-                    </span>
-                    <span className="truncate text-sm">{e.title}</span>
+                  <li key={e.id}>
+                    {/* 【行ごと押せるようにする】文字だけを的にすると、歩きながらでは当たらない */}
+                    <Link
+                      href="/plan"
+                      className="flex min-h-12 items-center gap-2 px-4 py-1.5 active:bg-neutral-100 dark:active:bg-neutral-800"
+                    >
+                      <span className={`size-2.5 shrink-0 rounded-full ${style.bar}`} />
+                      <span className="w-11 shrink-0 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                        {e.start_time ? e.start_time.slice(0, 5) : "終日"}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm">{e.title}</span>
+                      <span className="shrink-0 text-neutral-300 dark:text-neutral-600">›</span>
+                    </Link>
                   </li>
                 );
               })}
@@ -364,14 +371,28 @@ export function HomeScreen() {
           {todayMeals.length === 0 ? (
             <Empty>まだ決めていない</Empty>
           ) : (
-            <ul className="px-4 pb-3.5">
+            <ul className="pb-2">
               {todayMeals.map((m) => (
-                <li key={m.id} className="flex items-center gap-2 py-1.5 text-sm">
-                  <span className="w-11 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">{m.slot}</span>
-                  <span className="truncate">{m.name ?? "(未定)"}</span>
-                  {m.status === "実施" && (
-                    <span className="ml-auto shrink-0 text-[10px] font-bold text-emerald-600">作った</span>
-                  )}
+                <li key={m.id}>
+                  {/*
+                    【献立から作り方へ、1タップで飛べるようにする】
+                    台所で開くのはここ。以前は文字が並んでいるだけで、レシピを開くには
+                    献立を見て名前を覚え、レシピタブへ行って探し直す必要があった。
+                    レシピが結び付いていない献立(名前だけ手で入れたもの)はカレンダーへ送る。
+                  */}
+                  <Link
+                    href={m.recipe_id != null ? `/recipes/${m.recipe_id}` : "/plan"}
+                    className="flex min-h-12 items-center gap-2 px-4 py-1.5 text-sm active:bg-neutral-100 dark:active:bg-neutral-800"
+                  >
+                    <span className="w-11 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">{m.slot}</span>
+                    <span className="min-w-0 flex-1 truncate">{m.name ?? "(未定)"}</span>
+                    {m.status === "実施" && (
+                      <span className="shrink-0 text-[10px] font-bold text-emerald-600">作った</span>
+                    )}
+                    <span className="shrink-0 text-neutral-300 dark:text-neutral-600">
+                      {m.recipe_id != null ? "›" : "…"}
+                    </span>
+                  </Link>
                 </li>
               ))}
             </ul>
@@ -385,20 +406,24 @@ export function HomeScreen() {
               いまの在庫だけで作れて、この2週間に作っていないものはありません
             </Empty>
           ) : (
-            <ul className="px-4 pb-3.5">
+            <ul className="pb-2">
               {candidates.map((r) => (
-                <li key={r.id} className="flex items-center gap-2 py-1.5">
-                  <Link href={`/recipes/${r.id}`} className="min-w-0 flex-1 truncate text-sm">
-                    {r.name}
-                  </Link>
-                  {r.time_min != null && (
-                    <span className="shrink-0 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                      {r.time_min}分
+                <li key={r.id}>
+                  <Link
+                    href={`/recipes/${r.id}`}
+                    className="flex min-h-12 items-center gap-2 px-4 py-1.5 active:bg-neutral-100 dark:active:bg-neutral-800"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm">{r.name}</span>
+                    {r.time_min != null && (
+                      <span className="shrink-0 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                        {r.time_min}分
+                      </span>
+                    )}
+                    <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+                      いま作れる
                     </span>
-                  )}
-                  <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
-                    いま作れる
-                  </span>
+                    <span className="shrink-0 text-neutral-300 dark:text-neutral-600">›</span>
+                  </Link>
                 </li>
               ))}
             </ul>

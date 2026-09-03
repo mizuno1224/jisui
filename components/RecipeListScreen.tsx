@@ -12,9 +12,16 @@ import {
 import { useTable } from "@/lib/use-table";
 import { normalizeText } from "@/lib/matching";
 import { EQUIPMENT_LABELS, equipmentTagsOf, missingByRecipe } from "@/lib/recipe-facets";
-import type { Recipe, RecipeIngredient } from "@/lib/types";
+import { todayISO } from "@/lib/dates";
+import type { MealPlan, Recipe, RecipeIngredient } from "@/lib/types";
 
-const CATEGORIES = ["主菜", "副菜", "汁物", "麺・丼", "弁当おかず", "その他"];
+/*
+ * 分類の並び順。**札そのものはレシピの中身から作る。**
+ * 決め打ちの一覧を持っていたころ、「麺・丼」と「弁当おかず」は0件なのに札が出て、
+ * 実際に4品ある「主食」の札が無かった。押しても何も起きない札は、
+ * 使う人に「壊れている」と思わせる。
+ */
+const CATEGORY_ORDER = ["主菜", "主食", "副菜", "汁物", "その他"];
 
 /** 「帰りが遅い日でも作れる」の線。カードの調理時間(time_min)で切る。 */
 const QUICK_MIN = 10;
@@ -28,6 +35,8 @@ export function RecipeListScreen() {
   // 「いま作れる」を出すために在庫と常備品を読む。判定は RecipeDetailScreen と同じ
   // ものを lib/recipe-facets.ts から使う(別々に書くと一覧と中の表示が食い違う)。
   const pantry = useTable<PantryRow>("pantry");
+  // 「今日つくる」を出すために今日の献立を読む
+  const plans = useTable<MealPlan>("meal_plan");
   const inventory = useSyncExternalStore(subscribeInventory, invSnapshot, invServer);
   useEffect(() => {
     void initInventory();
@@ -41,6 +50,35 @@ export function RecipeListScreen() {
     return map;
   }, [ingredients.rows]);
 
+  /**
+   * 今日つくることになっているもの。
+   *
+   * 献立に recipe_id が入っていればそれで、名前だけの献立(手で入れたもの)は
+   * 名前で突き合わせる。**中止にした献立は数えない。**
+   */
+  const todayCooking = useMemo(() => {
+    const today = todayISO();
+    const ids = new Set<number>();
+    const names = new Set<string>();
+    for (const p of plans.rows) {
+      if (p.date !== today || p.status === "中止") continue;
+      if (p.recipe_id != null) ids.add(p.recipe_id);
+      if (p.name) names.add(p.name);
+    }
+    return { ids, names };
+  }, [plans.rows]);
+
+  const categories = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const r of rows) if (r.category) count.set(r.category, (count.get(r.category) ?? 0) + 1);
+    const rank = (c: string) => {
+      const i = CATEGORY_ORDER.indexOf(c);
+      return i < 0 ? 99 : i;
+    };
+    return [...count.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+  }, [rows]);
+
+  const [todayOnly, setTodayOnly] = useState(false);
   const [category, setCategory] = useState<string | null>(null);
   const [freezableOnly, setFreezableOnly] = useState(false);
   const [readyOnly, setReadyOnly] = useState(false);
@@ -74,6 +112,7 @@ export function RecipeListScreen() {
   const filtered = useMemo(() => {
     const q = normalizeText(query.trim());
     const hit = rows.filter((r) => {
+      if (todayOnly && !todayCooking.ids.has(r.id) && !todayCooking.names.has(r.name)) return false;
       if (category && r.category !== category) return false;
       if (freezableOnly && !r.freezable) return false;
       if (quickOnly && (r.time_min == null || r.time_min > QUICK_MIN)) return false;
@@ -113,7 +152,9 @@ export function RecipeListScreen() {
     return hit?.name ?? null;
   };
 
-  const available = CATEGORIES.filter((c) => rows.some((r) => r.category === c));
+  const todayCount = rows.filter(
+    (r) => todayCooking.ids.has(r.id) || todayCooking.names.has(r.name),
+  ).length;
   const readyCount = rows.filter((r) => readyToCook(r.id)).length;
   const quickCount = rows.filter((r) => r.time_min != null && r.time_min <= QUICK_MIN).length;
 
@@ -133,13 +174,15 @@ export function RecipeListScreen() {
   }, [equipmentOf]);
 
   const clearAll = () => {
+    setTodayOnly(false);
     setCategory(null);
     setFreezableOnly(false);
     setReadyOnly(false);
     setQuickOnly(false);
     setEquipment(null);
   };
-  const noFilter = !category && !freezableOnly && !readyOnly && !quickOnly && !equipment;
+  const noFilter =
+    !todayOnly && !category && !freezableOnly && !readyOnly && !quickOnly && !equipment;
 
   return (
     <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
@@ -174,13 +217,13 @@ export function RecipeListScreen() {
           <FilterChip active={noFilter} onClick={clearAll}>
             すべて
           </FilterChip>
-          {available.map((c) => (
+          {categories.map(([c, n]) => (
             <FilterChip
               key={c}
               active={category === c}
               onClick={() => setCategory(category === c ? null : c)}
             >
-              {c}
+              {c} {n}
             </FilterChip>
           ))}
         </div>
@@ -191,6 +234,16 @@ export function RecipeListScreen() {
          * 夕方いちばん知りたいことだから。
          */}
         <div className="-mx-4 mt-1.5 flex gap-1.5 overflow-x-auto px-4 pb-1">
+          {/*
+            【「今日つくる」を一番左に置く】台所で開く目的のほとんどが
+            「今日の献立の作り方を見る」なので、そこへ最短で着けるようにする。
+            今日の献立が1つも無い日は札そのものを出さない(押しても0件になるだけ)。
+          */}
+          {todayCount > 0 && (
+            <FilterChip active={todayOnly} onClick={() => setTodayOnly((v) => !v)} tone="emerald">
+              📅 今日つくる {todayCount}
+            </FilterChip>
+          )}
           <FilterChip
             active={readyOnly}
             onClick={() => setReadyOnly((v) => !v)}
@@ -225,9 +278,11 @@ export function RecipeListScreen() {
         error={error}
         empty={filtered.length === 0}
         emptyText={
-          readyOnly
-            ? "いまの在庫だけで作れるレシピはありません。条件を外すか、買い物リストを見てください。"
-            : "条件に合うレシピがありません。"
+          todayOnly
+            ? "今日の献立に、レシピが結び付いているものがありません。カレンダーから献立を選び直すか、AIに相談してください。"
+            : readyOnly
+              ? "いまの在庫だけで作れるレシピはありません。条件を外すか、買い物リストを見てください。"
+              : "条件に合うレシピがありません。"
         }
       />
 
