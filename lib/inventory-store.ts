@@ -5,11 +5,15 @@
 // 認証まわり(ログイン状態・世帯 id)は store.ts が持っているものを借りる。
 // 二重に持つとログイン直後の挙動がずれるため。
 import * as local from "./local-db";
+import { guessSection, looseMatch } from "./matching";
 import { LOCAL_HOUSEHOLD_ID } from "./seed-data";
 import {
+  addItem as addShoppingItem,
+  findDuplicate as findShoppingDuplicate,
   getSnapshot as getSession,
   init as initSession,
   isPermanent,
+  removeItem as removeShoppingItem,
   subscribe as subscribeSession,
 } from "./store";
 import { getSupabase } from "./supabase/client";
@@ -24,6 +28,13 @@ import {
 
 const TABLE = "inventory";
 const STORE: local.RowStore = "inventory";
+/**
+ * 「また買う」印の付いた常備品の名前。この端末に覚えておく。
+ *
+ * 冷蔵庫の前は圏外のことがある。切らした瞬間に買い物リストへ足すかどうかを
+ * 決めるのに通信が要ると、いちばん必要な場面で効かない。
+ */
+const META_STAPLES = "staple_names";
 const REQUEST_TIMEOUT_MS = 8_000;
 const abortAfterTimeout = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
@@ -41,6 +52,22 @@ export type InventorySnapshot = {
    * 立っている間は、成功時にエラー表示を消さない。
    */
   blocked: boolean;
+  /**
+   * 直前に「切らしたので買い物リストへ足した」もの。
+   *
+   * 【黙って足さない】画面がこれを見て「牛乳を足しました / 取り消す」と出す。
+   * 自分が押していないのにリストが増えると、次に開いたときに
+   * 「なぜこれが載っているのか」が分からなくなる。
+   */
+  restocked: { name: string; shoppingId: ItemId } | null;
+  /**
+   * 「また買う」印の付いた常備品の名前。
+   *
+   * 画面がこれを見て印を出すので、**状態に入れておく**。
+   * モジュールの変数に持っただけだと、取り直しても React に伝わらず、
+   * 印が付いたのに画面が変わらない(次に何か触るまで古いまま)。
+   */
+  staples: string[];
 };
 
 const INITIAL: InventorySnapshot = {
@@ -50,6 +77,8 @@ const INITIAL: InventorySnapshot = {
   syncing: false,
   error: null,
   blocked: false,
+  restocked: null,
+  staples: [],
 };
 
 let snapshot: InventorySnapshot = INITIAL;
@@ -95,6 +124,84 @@ function errorMessage(e: unknown): string {
   return String(e);
 }
 
+// ------------------------------------------------ 切らしたら買い物リストへ
+
+/**
+ * 「また買う」印の付いた常備品の名前。
+ *
+ * 【印は pantry.staple をそのまま使う】
+ * 在庫の表に別の印を足すこともできたが、そうすると
+ * scripts/restock-staples.mjs が見ている印と2つになり、
+ * 「アプリでは足りない扱い、パソコンでは足りている扱い」が起きる。
+ * 規則は1つにして、置き場所も1つにする。
+ */
+
+/** その在庫が「切らしたら買い直すもの」か。名前のゆるい一致で見る */
+export function isStaple(name: string): boolean {
+  return snapshot.staples.some((s) => looseMatch(s, name));
+}
+
+async function loadStaples() {
+  emit({ staples: (await local.getMeta<string[]>(META_STAPLES)) ?? [] });
+}
+
+/**
+ * 常備品の印を取り直す。**失敗しても黙って諦める。**
+ * ここで例外を投げると、在庫そのものの同期まで巻き添えで止まる。
+ */
+export async function refreshStaples() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  const { data, error } = await supabase
+    .from("pantry")
+    .select("name, staple")
+    .eq("staple", true)
+    .abortSignal(abortAfterTimeout());
+  if (error || !data) return;
+  const names = (data as { name: string }[]).map((r) => r.name);
+  emit({ staples: names });
+  await local.setMeta(META_STAPLES, names);
+}
+
+/**
+ * 切らしたので買い物リストへ足す。
+ *
+ * 【「切らした瞬間」だけ足す】
+ * 0 のたびに足すと、「今週は要らない」とリストから消しても、
+ * 次に −を押しただけで戻ってくる。リストが自分のものでなくなる。
+ * だから 1以上 → 0 に変わったときだけ足す
+ * (scripts/restock-staples.mjs が前回の状態を覚えているのと同じ考え)。
+ *
+ * 【すでにリストにあれば足さない】
+ * 妻が先に足しているかもしれない。店で2本カゴに入る事故を防ぐ。
+ */
+async function restockIfOut(item: InventoryItem, before: number, after: number) {
+  if (before <= 0 || after > 0) return;
+  if (!isStaple(item.name)) return;
+  if (findShoppingDuplicate(item.name)) return;
+
+  const added = await addShoppingItem({
+    item: item.name,
+    qty: "1",
+    section: guessSection(item.name),
+    reason: "使い切りました(在庫が0)",
+  });
+  emit({ restocked: { name: item.name, shoppingId: added.id } });
+}
+
+/** スナックバーを閉じる。足したものはそのまま残る */
+export function dismissRestocked() {
+  emit({ restocked: null });
+}
+
+/** 「取り消す」。足した1行を買い物リストから消す */
+export async function undoRestock() {
+  const r = snapshot.restocked;
+  if (!r) return;
+  emit({ restocked: null });
+  await removeShoppingItem(r.shoppingId);
+}
+
 // ------------------------------------------------------------------ 初期化
 
 let initialized = false;
@@ -108,6 +215,7 @@ export async function init() {
 
   const cached = await local.loadRows<InventoryItem>(STORE);
   setItems(cached);
+  await loadStaples();
   await refreshPending();
   emit({ status: "ready" });
 
@@ -290,6 +398,10 @@ async function pull() {
   const next = [...merged, ...localOnly];
   await local.replaceRows(STORE, next);
   setItems(next);
+
+  // 在庫を取り直すついでに「また買う」印も取り直す。
+  // 相手がアプリで印を付け替えているかもしれない。
+  await refreshStaples();
 }
 
 let channel: ReturnType<NonNullable<ReturnType<typeof getSupabase>>["channel"]> | null = null;
@@ -357,12 +469,16 @@ export async function adjustQty(id: ItemId, delta: number) {
   const item = snapshot.items.find((i) => String(i.id) === String(id));
   if (!item) return;
   const current = item.qty ?? 0;
-  const next = Math.round((current + delta) * 10) / 10;
-  await patchLocal(id, { qty: Math.max(0, next) });
+  const next = Math.max(0, Math.round((current + delta) * 10) / 10);
+  await patchLocal(id, { qty: next });
+  await restockIfOut(item, current, next);
 }
 
 export async function setQty(id: ItemId, qty: number) {
-  await patchLocal(id, { qty: Math.max(0, qty) });
+  const item = snapshot.items.find((i) => String(i.id) === String(id));
+  const next = Math.max(0, qty);
+  await patchLocal(id, { qty: next });
+  if (item) await restockIfOut(item, item.qty ?? 0, next);
 }
 
 export async function setLocation(id: ItemId, location: Location) {
@@ -384,17 +500,29 @@ export async function saveDetails(
   id: ItemId,
   patch: { qty?: number; expiry?: string | null; location?: Location },
 ) {
+  const item = snapshot.items.find((i) => String(i.id) === String(id));
   const next: Partial<InventoryItem> = {};
   if (patch.qty !== undefined) next.qty = Math.max(0, patch.qty);
   if (patch.expiry !== undefined) next.expiry = patch.expiry;
   if (patch.location !== undefined) next.location = patch.location;
   await patchLocal(id, next);
+  if (item && next.qty != null) await restockIfOut(item, item.qty ?? 0, next.qty);
 }
 
+/**
+ * 「使い切った」。行ごと消す。
+ *
+ * 【すでに0だったものは足し直さない】
+ * 0 になった時点で1回足している。そのあと利用者が「今週は要らない」と
+ * 買い物リストから消してから在庫の行を片付けると、消したはずのものが
+ * また載ってしまう。数を数えていない品(qty が null)は1個あった扱いにする。
+ */
 export async function removeItem(id: ItemId) {
+  const item = snapshot.items.find((i) => String(i.id) === String(id));
   await local.removeRow(STORE, id);
   setItems(snapshot.items.filter((i) => String(i.id) !== String(id)));
   await queue({ kind: "delete", id });
+  if (item) await restockIfOut(item, item.qty ?? 1, 0);
 }
 
 export type NewInventory = {

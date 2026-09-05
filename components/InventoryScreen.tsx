@@ -2,18 +2,24 @@
 
 import { useMemo, useState, useSyncExternalStore, useEffect } from "react";
 import { LoadNotice, ScreenHeader } from "@/components/ScreenHeader";
+import { Snackbar } from "@/components/Snackbar";
 import { daysUntil, todayISO } from "@/lib/dates";
 import {
   addItem,
   adjustQty,
+  dismissRestocked,
   getServerSnapshot,
   getSnapshot,
   init,
+  isStaple,
+  refreshStaples,
   removeItem,
   saveDetails,
   subscribe,
   syncNow,
+  undoRestock,
 } from "@/lib/inventory-store";
+import { setStaple } from "@/lib/mutations";
 import { looseMatch, normalizeText } from "@/lib/matching";
 import { useTable } from "@/lib/use-table";
 import {
@@ -83,6 +89,12 @@ function InventoryRow({
           {badge && (
             <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
               {badge.text}
+            </span>
+          )}
+          {/* 【印は文字で出す】色や記号だけだと、何の印か覚えていないと分からない */}
+          {isStaple(item.name) && (
+            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200">
+              また買う
             </span>
           )}
         </span>
@@ -375,6 +387,19 @@ export function InventoryScreen() {
           onDone={() => setTarget(null)}
         />
       )}
+
+      {/*
+        自動で足したことを必ず見せる。
+        自分が押していないのにリストが増えると、次に開いたときに
+        「なぜこれが載っているのか」が分からなくなる。
+      */}
+      {snapshot.restocked && (
+        <Snackbar
+          message={`${snapshot.restocked.name}を買い物リストに足しました`}
+          onAction={() => void undoRestock()}
+          onDismiss={dismissRestocked}
+        />
+      )}
     </main>
   );
 }
@@ -395,6 +420,35 @@ function ItemActionSheet({
   // 以前は押した瞬間に保存していたので、そのまま閉じても場所だけ変わっていた。
   // 数量・期限と同じく「保存」で確定する。
   const [location, setLocationInput] = useState<Location>(item.location);
+
+  /*
+   * 「また買う」印。実体は pantry.staple(lib/mutations.ts の setStaple)。
+   *
+   * 在庫の +/- と違って、これは圏外では保存できない。
+   * 冷蔵庫の前で押す操作ではないので行列は作らず、その場で理由を出す。
+   */
+  const [staple, setStapleOn] = useState(() => isStaple(item.name));
+  const [staplePending, setStaplePending] = useState(false);
+  const [stapleError, setStapleError] = useState<string | null>(null);
+
+  const toggleStaple = async () => {
+    const next = !staple;
+    setStaplePending(true);
+    setStapleError(null);
+    try {
+      await setStaple(item.name, next);
+      await refreshStaples();
+      setStapleOn(next);
+    } catch (e) {
+      setStapleError(
+        e instanceof Error
+          ? `印を保存できませんでした: ${e.message}`
+          : "印を保存できませんでした",
+      );
+    } finally {
+      setStaplePending(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
@@ -448,6 +502,39 @@ function ItemActionSheet({
           <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
             {LOCATION_INFO[location].full}・{LOCATION_INFO[location].note}
           </p>
+        </div>
+
+        {/* ------------------------------------------- 切らしたら買い直すか */}
+        <div className="mt-4 rounded-xl bg-neutral-100 p-3 dark:bg-neutral-800">
+          <button
+            type="button"
+            onClick={() => void toggleStaple()}
+            disabled={staplePending}
+            className="flex w-full items-center gap-3 text-left disabled:opacity-50"
+          >
+            <span
+              className={`flex size-6 shrink-0 items-center justify-center rounded-md border-2 ${
+                staple
+                  ? "border-emerald-600 bg-emerald-600 text-white"
+                  : "border-neutral-400 dark:border-neutral-500"
+              }`}
+              aria-hidden
+            >
+              {staple ? "✓" : ""}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-bold">また買う(切らしたら買い物リストへ)</span>
+              <span className="block text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                印を付けると、数量が0になったときと「使い切った」を押したときに、
+                買い物リストへ自動で足します。すでにリストにあれば足しません。
+              </span>
+            </span>
+          </button>
+          {stapleError && (
+            <p className="mt-2 text-[11px] font-bold text-rose-700 dark:text-rose-300">
+              {stapleError}
+            </p>
+          )}
         </div>
 
         <button

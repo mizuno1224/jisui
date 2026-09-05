@@ -10,7 +10,10 @@ import {
   describeRecord,
   parseHandoff,
   type Handoff,
+  type HandoffRecord,
 } from "@/lib/handoff";
+import { yen } from "@/lib/dates";
+import { LOCATIONS, type Location } from "@/lib/types";
 
 /**
  * チャット(Cowork)の結果を、貼り付けてアプリに取り込む画面。
@@ -45,7 +48,53 @@ export function HandoffScreen() {
   } | null>(null);
 
   const parsed = useMemo(() => (text.trim() ? parseHandoff(text) : null), [text]);
-  const handoff: Handoff | null = parsed?.ok ? parsed.value : null;
+  const pasted: Handoff | null = parsed?.ok ? parsed.value : null;
+
+  /**
+   * 在庫行の直し。records の何番目かをキーに、置き場所と「入れない」を覚える。
+   *
+   * 【貼った文字列そのものは書き換えない】
+   * 直すたびに textarea を書き換えると、途中で貼り直したくなったときに
+   * 元が分からなくなる。直しは別に持ち、取り込む直前に重ねる。
+   */
+  const [invEdits, setInvEdits] = useState<Record<number, InvEdit[]>>({});
+  /** どのレコードの内訳を開いているか */
+  const [openDetail, setOpenDetail] = useState<number | null>(null);
+
+  /**
+   * 貼り直したら直しは捨てる。別のレシートに前の直しが残ると事故になる。
+   *
+   * 効果(useEffect)で消さない。効果の中で setState すると描画が連鎖するうえ、
+   * 「文字が変わったら」の判定が1描画ぶん遅れる。**文字を入れ替える側で捨てる。**
+   */
+  const replaceText = (next: string) => {
+    setText(next);
+    setInvEdits({});
+    setOpenDetail(null);
+  };
+
+  /** 直しを重ねた、実際に取り込むもの */
+  const handoff: Handoff | null = useMemo(() => {
+    if (!pasted) return null;
+    if (Object.keys(invEdits).length === 0) return pasted;
+    return {
+      ...pasted,
+      records: pasted.records.map((r, i) => {
+        const edits = invEdits[i];
+        if (!edits) return r;
+        const inv = (r.args["inventory"] as Record<string, unknown>[] | undefined) ?? [];
+        return {
+          ...r,
+          args: {
+            ...r.args,
+            inventory: inv
+              .map((row, j) => ({ ...row, location: edits[j]?.location ?? row.location }))
+              .filter((_, j) => !edits[j]?.skip),
+          },
+        };
+      }),
+    };
+  }, [pasted, invEdits]);
 
   // 「この端末で入れ済みか」は IndexedDB を読むので非同期。
   // 効果の中で同期的に setState すると連鎖描画になるため、必ず解決後に入れる。
@@ -67,7 +116,7 @@ export function HandoffScreen() {
     try {
       const r = await applyHandoff(handoff);
       setResult(r);
-      if (r.failed.length === 0) setText("");
+      if (r.failed.length === 0) replaceText("");
     } catch (e) {
       setResult({
         ok: [],
@@ -117,7 +166,7 @@ export function HandoffScreen() {
             onClick={() => {
               void navigator.clipboard
                 .readText()
-                .then((t) => setText(t))
+                .then((t) => replaceText(t))
                 .catch(() =>
                   setText((v) =>
                     v === "" ? "" : v,
@@ -134,7 +183,7 @@ export function HandoffScreen() {
 
           <textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => replaceText(e.target.value)}
             rows={8}
             placeholder={'{\n  "kind": "jisui-handoff",\n  "records": [ … ]\n}'}
             className="w-full rounded-xl border border-neutral-300 bg-white p-3 font-mono text-[11px] dark:border-neutral-700 dark:bg-neutral-800"
@@ -170,6 +219,23 @@ export function HandoffScreen() {
                     >
                       {describeRecord(r)}
                       {dup && <span className="ml-1 font-bold">— この端末で入れ済み。飛ばします</span>}
+
+                      {hasDetail(r) && (
+                        <button
+                          type="button"
+                          onClick={() => setOpenDetail(openDetail === i ? null : i)}
+                          className="mt-1.5 block h-9 rounded-lg bg-white px-3 text-[11px] font-bold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100"
+                        >
+                          {openDetail === i ? "内訳を閉じる" : "内訳を見る・置き場所を直す"}
+                        </button>
+                      )}
+                      {openDetail === i && (
+                        <ReceiptDetail
+                          record={r}
+                          edits={invEdits[i]}
+                          onChange={(next) => setInvEdits((cur) => ({ ...cur, [i]: next }))}
+                        />
+                      )}
                     </li>
                   );
                 })}
@@ -255,4 +321,150 @@ function decodeParam(d: string | null): string {
   } catch {
     return d;
   }
+}
+
+// --------------------------------------------------- レシートの内訳を見る
+
+/** 在庫1行ぶんの直し。置き場所を変えたか、在庫には入れないか */
+type InvEdit = { location?: Location; skip?: boolean };
+
+type ReceiptItem = { item?: string; price?: number };
+type ReceiptInv = {
+  name?: string;
+  qty?: number;
+  unit?: string;
+  location?: string;
+  expiry?: string | null;
+};
+
+/** 内訳を出せるのは、明細か在庫を持っているレコードだけ */
+function hasDetail(r: HandoffRecord): boolean {
+  const items = (r.args["items"] as ReceiptItem[] | undefined) ?? [];
+  const inv = (r.args["inventory"] as ReceiptInv[] | undefined) ?? [];
+  return items.length > 0 || inv.length > 0;
+}
+
+/**
+ * レシート1枚の中身。
+ *
+ * 【なぜ貼る前に見せるのか】
+ * 読み取ったのはチャットで、打ったのは人ではない。20点のレシートで
+ * 置き場所を1つ間違えると、豆腐が氷温に入って凍る。取り込んでから直すより、
+ * 入る前に直すほうが早い。**菓子のように在庫に要らないものも、ここで外せる。**
+ *
+ * 【合計は「合わせにいかない」】
+ * 外税のレシートは、明細の合計(税抜)と支払額(税込)が必ずずれる。
+ * 割引が明細に載らない店もある。ずれを警告にすると毎回赤くなって意味を失うので、
+ * 両方の数字と差を出すだけにして、判断は人に任せる。
+ */
+function ReceiptDetail({
+  record,
+  edits,
+  onChange,
+}: {
+  record: HandoffRecord;
+  edits: InvEdit[] | undefined;
+  onChange: (next: InvEdit[]) => void;
+}) {
+  const items = (record.args["items"] as ReceiptItem[] | undefined) ?? [];
+  const inv = (record.args["inventory"] as ReceiptInv[] | undefined) ?? [];
+  const amount = Number(record.args["amount"] ?? 0);
+  const itemSum = items.reduce((s, i) => s + (Number(i.price) || 0), 0);
+
+  const editOf = (j: number): InvEdit => edits?.[j] ?? {};
+  const setEdit = (j: number, patch: InvEdit) => {
+    const next = inv.map((_, k) => (k === j ? { ...editOf(k), ...patch } : editOf(k)));
+    onChange(next);
+  };
+  const keptCount = inv.filter((_, j) => !editOf(j).skip).length;
+
+  return (
+    <div className="mt-2 rounded-lg bg-white p-3 dark:bg-neutral-900">
+      {items.length > 0 && (
+        <>
+          <p className="text-[11px] font-bold">明細 {items.length} 件</p>
+          <ul className="mt-1 divide-y divide-neutral-100 dark:divide-neutral-800">
+            {items.map((it, j) => (
+              <li key={j} className="flex justify-between gap-2 py-1 text-[11px]">
+                <span className="min-w-0 flex-1 truncate">{it.item ?? "(名前なし)"}</span>
+                <span className="shrink-0 tabular-nums">
+                  {it.price == null ? "—" : yen(Number(it.price))}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+            明細の合計 {yen(itemSum)} / レシートの合計 {yen(amount)}
+            {itemSum !== amount && `(差 ${yen(Math.abs(amount - itemSum))})`}
+            <br />
+            外税のレシートや、明細に載らない割引があると差が出ます。
+            <strong>家計に入るのはレシートの合計のほう</strong>です。
+          </p>
+        </>
+      )}
+
+      {inv.length > 0 && (
+        <>
+          <p className="mt-3 text-[11px] font-bold">
+            在庫に入れるもの {keptCount} / {inv.length} 件
+          </p>
+          <ul className="mt-1 space-y-2">
+            {inv.map((row, j) => {
+              const e = editOf(j);
+              const loc = (e.location ?? row.location ?? "冷蔵") as Location;
+              return (
+                <li
+                  key={j}
+                  className={`rounded-lg border border-neutral-200 p-2 dark:border-neutral-700 ${
+                    e.skip ? "opacity-50" : ""
+                  }`}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">
+                      {row.name ?? "(名前なし)"}
+                      <span className="ml-1 font-normal text-neutral-500 dark:text-neutral-400">
+                        {row.qty ?? ""}
+                        {row.unit ?? ""}
+                        {row.expiry ? ` · 期限 ${row.expiry}` : ""}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEdit(j, { skip: !e.skip })}
+                      className="h-8 shrink-0 rounded-lg bg-neutral-100 px-2 text-[11px] font-bold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                    >
+                      {e.skip ? "戻す" : "入れない"}
+                    </button>
+                  </div>
+                  {!e.skip && (
+                    <div className="mt-1.5 flex gap-1">
+                      {LOCATIONS.map((l) => (
+                        <button
+                          key={l}
+                          type="button"
+                          onClick={() => setEdit(j, { location: l })}
+                          className={`h-8 flex-1 rounded-md text-[11px] font-bold ${
+                            loc === l
+                              ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                              : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                          }`}
+                        >
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+            肉と魚は<strong>氷温</strong>、葉物と根菜は<strong>野菜</strong>、
+            玉ねぎ・いも・未開封の調味料は<strong>常温</strong>。
+            切ってある野菜と豆腐は<strong>冷蔵</strong>(氷温に入れると凍ります)。
+          </p>
+        </>
+      )}
+    </div>
+  );
 }

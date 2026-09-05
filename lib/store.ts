@@ -699,7 +699,8 @@ async function rememberItem(input: NewItem) {
   await local.setMeta(META_RECENT, next);
 }
 
-export async function addItem(input: NewItem) {
+/** 足した行をそのまま返す。呼び出し側が「取り消す」で消せるようにするため */
+export async function addItem(input: NewItem): Promise<ShoppingItem> {
   const householdId = snapshot.householdId ?? LOCAL_HOUSEHOLD_ID;
   const sameSection = snapshot.items.filter((i) => i.section === input.section);
   const sortOrder = sameSection.reduce((max, i) => Math.max(max, i.sort_order), 0) + 10;
@@ -722,6 +723,7 @@ export async function addItem(input: NewItem) {
   upsertLocalState(row);
   await rememberItem(input);
   await queue({ kind: "add", tempId: row.id as string, item: row });
+  return row;
 }
 
 /** 本人が消したもの。相手が買っていても消す(force)。 */

@@ -24,7 +24,7 @@
 //      /records を開いてもホームが描かれる = 増えた画面がどこにも無いように見える。
 //      あわせて在庫の一覧から【数量0の行を畳んだ】。本番では在庫22点に対して
 //      0の行が30点あり、あるものより無いもののほうが多い画面になっていた。
-const VERSION = "v25";
+const VERSION = "v26";
 const SHELL_CACHE = `jisui-shell-${VERSION}`;
 const RUNTIME_CACHE = `jisui-runtime-${VERSION}`;
 const NAV_TIMEOUT_MS = 1500;

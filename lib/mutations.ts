@@ -559,6 +559,58 @@ export async function deleteIncome(id: number) {
   invalidate("income");
 }
 
+// ------------------------------------------------ 常備品(また買う印)
+
+/**
+ * 在庫の「また買う」印を付け外しする。
+ *
+ * 【印の正体は pantry.staple】
+ * 在庫の表に別の列を足さない。scripts/restock-staples.mjs が
+ * すでに staple を見て買い足しているので、列を増やすと規則が2つになり、
+ * アプリとパソコンで判断が食い違う。
+ *
+ * pantry には (household_id, name) の unique が無いので upsert は使えない。
+ * 名前で探してから、あれば更新・無ければ足す。
+ */
+export async function setStaple(name: string, on: boolean) {
+  const supabase = requireClient();
+  const householdId = getSession().householdId;
+
+  const { data, error } = await supabase
+    .from("pantry")
+    .select("id")
+    .eq("household_id", householdId)
+    .eq("name", name)
+    .limit(1)
+    .abortSignal(signal());
+  if (error) throw error;
+
+  const existing = data?.[0]?.id as number | undefined;
+  if (existing != null) {
+    const up = await supabase
+      .from("pantry")
+      .update({ staple: on })
+      .eq("id", existing)
+      .abortSignal(signal());
+    if (up.error) throw up.error;
+  } else {
+    // 印を外すだけなら、無い行をわざわざ作らない
+    if (!on) return;
+    const ins = await supabase
+      .from("pantry")
+      .insert({
+        household_id: householdId,
+        name,
+        category: "その他",
+        stock: "ある",
+        staple: true,
+      })
+      .abortSignal(signal());
+    if (ins.error) throw ins.error;
+  }
+  invalidate("pantry");
+}
+
 // -------------------------------------------------------------- 投資
 
 export async function saveWatchItem(input: {
