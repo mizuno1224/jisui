@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AddItemSheet } from "@/components/AddItemSheet";
 import { MoveToInventorySheet } from "@/components/MoveToInventorySheet";
+import { NextCandidates } from "@/components/NextCandidates";
 import { StatusChips } from "@/components/StatusChips";
 import { ItemRow } from "@/components/ItemRow";
 import { Snackbar } from "@/components/Snackbar";
@@ -200,9 +201,13 @@ export function ShoppingListScreen() {
       </header>
 
       {items.length === 0 ? (
-        <p className="px-6 py-20 text-center text-sm text-neutral-500 dark:text-neutral-400">
-          リストは空です。右下の + で追加できます。
-        </p>
+        <>
+          <p className="px-6 pb-2 pt-20 text-center text-sm text-neutral-500 dark:text-neutral-400">
+            リストは空です。右下の + で追加できます。
+          </p>
+          {/* 空のときこそ「次に何が要るか」が知りたい。開いた状態で出す */}
+          <NextCandidates shopping={items} defaultOpen />
+        </>
       ) : (
         <div className="pt-2">
           {remaining === 0 && counted.length > 0 && (
@@ -265,6 +270,13 @@ export function ShoppingListScreen() {
               </section>
             );
           })}
+
+          {/*
+            【件数には数えない】売り場の外に置き、残り件数にも進み具合にも
+            混ぜない。店で見るのは上のリストだけでよく、ここは買い終わってから
+            見るもの。買い終わった(未購入0)ときだけ開いた状態にする。
+          */}
+          <NextCandidates shopping={items} defaultOpen={remaining === 0} />
         </div>
       )}
 
