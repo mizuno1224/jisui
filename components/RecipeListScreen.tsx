@@ -9,6 +9,7 @@ import {
   init as initInventory,
   subscribe as subscribeInventory,
 } from "@/lib/inventory-store";
+import { useSwipeAmong } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import { normalizeText } from "@/lib/matching";
 import { EQUIPMENT_LABELS, equipmentTagsOf, missingByRecipe } from "@/lib/recipe-facets";
@@ -41,6 +42,9 @@ const CATEGORY_ORDER = ["主菜", "主食", "副菜", "汁物", "その他"];
  * (弁当の中身として使いつつ、夕食にも出せる)。
  */
 const BENTO = "冷凍弁当";
+
+/** 一番上の切り替え。横に払う向きもこの並び。 */
+const WORLDS = ["日常", "弁当"] as const;
 
 /** 「帰りが遅い日でも作れる」の線。カードの調理時間(time_min)で切る。 */
 const QUICK_MIN = 10;
@@ -218,8 +222,17 @@ export function RecipeListScreen() {
   const noFilter =
     !todayOnly && !category && !freezableOnly && !readyOnly && !quickOnly && !equipment;
 
+  /*
+   * 横に払うと「普段のごはん ⇄ 冷凍弁当」。
+   * 切り替えたら絞り込みは白紙に戻す(上のボタンを押したときと同じ)。
+   */
+  const swipe = useSwipeAmong(WORLDS, world, (w) => {
+    setWorld(w);
+    clearAll();
+  });
+
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main {...swipe} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title="レシピ"
         right={
@@ -246,7 +259,7 @@ export function RecipeListScreen() {
          * (「主菜」で絞ったまま弁当側に移ると、0件の画面から始まってしまう)。
          */}
         <div className="mt-2 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
-          {(["日常", "弁当"] as const).map((w) => (
+          {WORLDS.map((w) => (
             <button
               key={w}
               type="button"

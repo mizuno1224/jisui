@@ -20,7 +20,16 @@ export function normalizeText(input: string): string {
     .replace(/[(（][^)）]*[)）]/g, "") // 括弧書きを落とす: キャベツ(カット) → キャベツ
     .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     .replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)) // カタカナ→ひらがな
-    .replace(/[\s・,、]/g, "")
+    /*
+     * 【「の」も落とす】
+     * 常備品は「桃屋 きざみしょうが」、レシピの材料は「桃屋のきざみしょうが」と
+     * 書かれていた。空白は落としていたが「の」は残していたので、
+     * **家にあるのに「足りない」と判定されていた。**
+     * その結果、レシピの「足りない n 点を買い物リストへ」が、
+     * すでに家にあるものを買わせようとしていた。
+     * 材料名は「◯◯の△△」の形が多いので、ここは落として揃える。
+     */
+    .replace(/[\s・,、の]/g, "")
     .toLowerCase()
     .trim();
   cache.set(input, out);

@@ -20,6 +20,7 @@ import {
   type CheckupResult,
 } from "@/lib/checkup";
 import { MEMBERS, ageOn, type HealthProfile, type Member } from "@/lib/health";
+import { useSwipeAmong } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 
 /**
@@ -45,6 +46,9 @@ import { useTable } from "@/lib/use-table";
  */
 export function ExamsScreen() {
   const [member, setMember] = useState<Member>("夫");
+  /* 一覧を横に払うと、夫 ⇄ 妻 が入れ替わる。上の札まで指を伸ばさずに見比べられる。 */
+  const swipe = useSwipeAmong(MEMBERS, member, setMember);
+
   const [openId, setOpenId] = useState<number | null>(null);
 
   const profiles = useTable<HealthProfile>("health_profile");
@@ -111,7 +115,7 @@ export function ExamsScreen() {
   const age = ageOn(profile?.birth_date ?? null, todayISO());
 
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main {...swipe} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title="健康"
         subtitle="健康診断"

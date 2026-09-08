@@ -35,6 +35,7 @@ import {
   type SleepLog,
   type Vitals,
 } from "@/lib/health";
+import { useSwipeAmong } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import type { MealPlan, Recipe } from "@/lib/types";
 
@@ -109,6 +110,8 @@ export function HealthScreen() {
   const today = todayISO();
   const [member, setMember] = useMember();
   const [sheet, setSheet] = useState<SheetKind>(null);
+  /* 横に払うと 夫 ⇄ 妻。入力シートが開いている間は、その中の操作を邪魔しない。 */
+  const swipe = useSwipeAmong(MEMBERS, member, setMember, sheet === null);
 
   const profiles = useTable<HealthProfile>("health_profile");
   const vitals = useTable<Vitals>("vitals", { orderBy: "date" });
@@ -235,7 +238,7 @@ export function HealthScreen() {
     .map((r) => ({ date: r.date, weight: Number(r.weight_kg) }));
 
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main {...swipe} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title="健康"
         subtitle={<>{formatDate(today)}</>}

@@ -16,7 +16,7 @@ import {
 } from "@/lib/inventory-store";
 import { fullOf, remainLabel, snapQty, stepOf } from "@/lib/inventory-amount";
 import { looseMatch, normalizeText } from "@/lib/matching";
-import { useHorizontalSwipe } from "@/lib/use-swipe";
+import { useSwipeAmong } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import {
   LOCATIONS,
@@ -148,24 +148,16 @@ export function InventoryScreen() {
   const [query, setQuery] = useState("");
 
   /*
-   * 一覧を横に払うと隣の区画へ移る。
+   * 一覧を横に払うと隣の区画へ移る(冷蔵 → 氷温 → 野菜 → 冷凍 → 常温)。
    *
    * 冷蔵庫の前では片手・濡れた指なので、画面の一番上にあるタブまで
    * 親指を伸ばすのがつらい。一覧のどこを払っても移れるようにする。
    * タブは残す(いま何番目のどこにいるかは、見えていないと分からない)。
    *
-   * 【端で止める。回り込ませない。】常温の次が冷蔵に戻ると、
-   * 何周したのか分からなくなる。端に着いたら何も起きないほうがよい。
-   * 検索中はタブそのものが効かないので、払いも無効にする。
+   * 【検索中は効かせない】場所をまたいで探している最中なので、
+   * 区画が変わっても意味がない。
    */
-  const swipe = useHorizontalSwipe((dir) => {
-    const i = LOCATIONS.indexOf(tab);
-    const next = LOCATIONS[i + dir];
-    if (next) {
-      setTab(next);
-      navigator.vibrate?.(8);
-    }
-  }, !query.trim());
+  const swipe = useSwipeAmong(LOCATIONS, tab, setTab, !query.trim());
   const [target, setTarget] = useState<InventoryItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 

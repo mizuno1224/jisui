@@ -19,6 +19,7 @@ import {
   type Vaccination,
 } from "@/lib/health";
 import { saveScreening, saveTodo, saveVaccination } from "@/lib/mutations";
+import { useSwipeAmong } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import type { Todo } from "@/lib/types";
 
@@ -46,6 +47,9 @@ const NOTE = "このアプリは診断をしません。期限は目安です。
 export function CheckupsScreen() {
   const today = todayISO();
   const [member, setMember] = useState<Member>("夫");
+  /* 一覧を横に払うと、夫 ⇄ 妻 が入れ替わる。上の札まで指を伸ばさずに見比べられる。 */
+  const swipe = useSwipeAmong(MEMBERS, member, setMember);
+
   const [message, setMessage] = useState<string | null>(null);
 
   const profiles = useTable<HealthProfile>("health_profile");
@@ -104,7 +108,7 @@ export function CheckupsScreen() {
   };
 
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main {...swipe} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title="健康"
         subtitle="検診・予防接種"

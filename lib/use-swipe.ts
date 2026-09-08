@@ -75,3 +75,48 @@ export function useHorizontalSwipe(
     },
   };
 }
+
+/**
+ * 並びの中を隣へ動かす。**端では止まる(回り込まない)。**
+ *
+ * 在庫の区画、レシピの「普段/弁当」、健康の「夫/妻」のように、
+ * 決まった数の札を切り替える画面はアプリ中にある。
+ * 同じ指の動きがどの画面でも同じ意味になるように、ここに1つだけ書く。
+ *
+ * 【回り込ませない理由】
+ * 常温の次が冷蔵に戻ると、何周したのか分からなくなる。
+ * 端に着いたら何も起きないほうが、いまどこにいるかを見失わない。
+ *
+ * 【手ごたえを返す】
+ * 画面の上のほうにある札が変わるだけだと、指の下では何が起きたか分からない。
+ * 短く震わせて「効いた」ことを伝える(対応していない端末では何も起きない)。
+ */
+export function useSwipeAmong<T>(
+  items: readonly T[],
+  current: T,
+  onChange: (next: T) => void,
+  enabled = true,
+): SwipeHandlers {
+  return useHorizontalSwipe((dir) => {
+    const next = items[items.indexOf(current) + dir];
+    if (next === undefined) return;
+    onChange(next);
+    navigator.vibrate?.(8);
+  }, enabled);
+}
+
+/**
+ * 月を送る。家計・資産のように「前の月 / 次の月」がある画面向け。
+ * 端が無いので止めない。左へ払うと次の月へ進む。
+ */
+export function useSwipeMonths(
+  month: string,
+  onChange: (next: string) => void,
+  addMonths: (month: string, delta: number) => string,
+  enabled = true,
+): SwipeHandlers {
+  return useHorizontalSwipe((dir) => {
+    onChange(addMonths(month, dir));
+    navigator.vibrate?.(8);
+  }, enabled);
+}

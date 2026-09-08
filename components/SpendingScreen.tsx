@@ -12,6 +12,7 @@ import { ShareSheet } from "@/components/ShareSheet";
 import { TransactionSheet } from "@/components/TransactionSheet";
 import { BudgetSheet } from "@/components/BudgetSheet";
 import { addMonths, currentMonth, formatDate, monthLabel, yen } from "@/lib/dates";
+import { useSwipeMonths } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import type { Budget, CookLog, Transaction } from "@/lib/types";
 
@@ -34,6 +35,15 @@ export function SpendingScreen() {
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
+  /*
+   * 横に払うと月が動く。左へ払うと次の月。
+   * 月を送るのは家計でいちばん多い操作なのに、上の小さな札を押すしかなかった。
+   * 【シートが開いている間は効かせない】。金額を打っている最中に
+   * 背後の月が変わると、どの月に入れたのか分からなくなる。
+   */
+  const swipe = useSwipeMonths(month, setMonth, addMonths,
+    !editing && !adding && !budgetOpen && !shareOpen && !dupOpen);
+
   /** 一覧の絞り込み。null = 全部 */
   const [walletFilter, setWalletFilter] = useState<"夫婦" | "夫" | "妻" | "未分類" | null>(
     null,
@@ -176,7 +186,7 @@ export function SpendingScreen() {
   const max = byCategory[0]?.[1] ?? 1;
 
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main {...swipe} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <ScreenHeader
         title={`${monthLabel(month)}の支出`}
         subtitle={<>{yen(total)}</>}

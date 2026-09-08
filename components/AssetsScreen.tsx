@@ -11,6 +11,7 @@ import {
   saveBalance,
   saveIncome,
 } from "@/lib/mutations";
+import { useSwipeMonths } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import { saveTodo, setTodoDone } from "@/lib/mutations";
 import type {
@@ -50,6 +51,14 @@ export function AssetsScreen() {
   const [addingAccount, setAddingAccount] = useState(false);
   const [addingIncome, setAddingIncome] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * 横に払うと月が動く。左へ払うと次の月。
+   * 月を送るのは家計でいちばん多い操作なのに、上の小さな札を押すしかなかった。
+   * 【シートが開いている間は効かせない】。金額を打っている最中に
+   * 背後の月が変わると、どの月に入れたのか分からなくなる。
+   */
+  const swipe = useSwipeMonths(month, setMonth, addMonths,
+    !editingAccount && !addingAccount && !addingIncome);
 
   const balanceOf = (accountId: number): number | null => {
     const row = balances.rows.find((b) => b.account_id === accountId && b.year_month === month);
@@ -108,7 +117,7 @@ export function AssetsScreen() {
   };
 
   return (
-    <main className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
+    <main {...swipe} className="min-h-dvh bg-neutral-50 pb-44 dark:bg-neutral-950">
       <header className="relative sticky top-0 z-30 border-b border-neutral-200 bg-white/95 px-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
         <Link
           href="/spending"
