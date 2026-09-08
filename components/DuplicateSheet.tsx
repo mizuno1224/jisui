@@ -63,28 +63,6 @@ export function DuplicateSheet({
     }
   }
 
-  const Row = ({ t }: { t: Transaction }) => (
-    <div className="rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
-      <p className="text-xs text-neutral-500">
-        {t.date}・{t.source}
-      </p>
-      <p className="mt-1 text-sm font-bold leading-snug">{t.merchant_raw}</p>
-      <p className="mt-1.5 text-xl font-bold tabular-nums">¥{YEN.format(t.amount)}</p>
-      <p className="mt-0.5 text-[11px] text-neutral-500">
-        {t.category}
-        {t.memo ? `・${t.memo}` : ""}
-      </p>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => remove(t)}
-        className="mt-3 h-10 w-full rounded-xl bg-red-50 text-sm font-bold text-red-700 active:bg-red-100 disabled:opacity-50 dark:bg-red-950/50 dark:text-red-300"
-      >
-        こちらを消す
-      </button>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-neutral-50 dark:bg-neutral-950">
       <header className="border-b border-neutral-200 bg-white px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-3 dark:border-neutral-800 dark:bg-neutral-900">
@@ -117,9 +95,9 @@ export function DuplicateSheet({
           </p>
 
           <div className="mt-4 space-y-3">
-            <Row t={head.a} />
+            <Row t={head.a} busy={busy} onRemove={remove} />
             <div className="text-center text-xs font-bold text-neutral-400">↕ 同じ買い物?</div>
-            <Row t={head.b} />
+            <Row t={head.b} busy={busy} onRemove={remove} />
           </div>
 
           <button
@@ -150,6 +128,45 @@ export function DuplicateSheet({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/*
+ * 【描画のたびに作り直さない】
+ * これは DuplicateSheet の中で定義していた。関数の中に書くと、
+ * 親が描き直るたびに【別のコンポーネント】になり、React は中身を
+ * 作り直す(状態も DOM も捨てる)。押した瞬間に消える的になりかねないので、
+ * 外に出して props で受け取る。
+ */
+function Row({
+  t,
+  busy,
+  onRemove,
+}: {
+  t: Transaction;
+  busy: boolean;
+  onRemove: (t: Transaction) => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+      <p className="text-xs text-neutral-500">
+        {t.date}・{t.source}
+      </p>
+      <p className="mt-1 text-sm font-bold leading-snug">{t.merchant_raw}</p>
+      <p className="mt-1.5 text-xl font-bold tabular-nums">¥{YEN.format(t.amount)}</p>
+      <p className="mt-0.5 text-[11px] text-neutral-500">
+        {t.category}
+        {t.memo ? `・${t.memo}` : ""}
+      </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => onRemove(t)}
+        className="mt-3 h-10 w-full rounded-xl bg-red-50 text-sm font-bold text-red-700 active:bg-red-100 disabled:opacity-50 dark:bg-red-950/50 dark:text-red-300"
+      >
+        こちらを消す
+      </button>
     </div>
   );
 }

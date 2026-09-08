@@ -76,24 +76,6 @@ export function SettlementCard({
     );
   }
 
-  const Line = ({
-    label,
-    amount,
-    note,
-  }: {
-    label: string;
-    amount: number;
-    note?: string;
-  }) => (
-    <div className="flex items-baseline justify-between gap-3 py-2">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{label}</p>
-        {note && <p className="mt-0.5 text-[11px] text-neutral-500">{note}</p>}
-      </div>
-      <p className="shrink-0 text-lg font-bold tabular-nums">{yen(amount)}</p>
-    </div>
-  );
-
   return (
     <section className="mx-4 mt-4 rounded-2xl bg-white p-4 dark:bg-neutral-900">
       <h2 className="text-sm font-bold">月末に移すお金</h2>
@@ -157,5 +139,23 @@ export function SettlementCard({
         <p className="mt-3 text-sm text-neutral-500">この月に移すお金はありません。</p>
       )}
     </section>
+  );
+}
+
+/*
+ * 【描画のたびに作り直さない】
+ * これは SettlementCard の中で定義していた。関数の中に書くと、
+ * 親が描き直るたびに別のコンポーネントになり、React が中身を捨てて作り直す。
+ * 外にあるものだけを使っているので、そのまま外へ出せる。
+ */
+function Line({ label, amount, note }: { label: string; amount: number; note?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-2">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{label}</p>
+        {note && <p className="mt-0.5 text-[11px] text-neutral-500">{note}</p>}
+      </div>
+      <p className="shrink-0 text-lg font-bold tabular-nums">{yen(amount)}</p>
+    </div>
   );
 }

@@ -91,9 +91,21 @@ function parseQty(qty: string | null): { qty: number; unit: string | null } {
   return { qty: Number(m[1]), unit: m[2].trim() || null };
 }
 
+/**
+ * 在庫に入れないもの。惣菜・弁当・日用品・その場で食べたもの。
+ *
+ * 【これが無いと、片付ける道が「全部を在庫に入れる」しか無かった】
+ * からあげ弁当やトイレットペーパーを在庫表に入れたい人はいない。
+ * かといってチェックを外すわけにもいかず、結局リストに残り続けていた。
+ * 残った行は「まだ買っていないもの」として数えられるので、
+ * 常備品の切らし判定(lib/staples.ts)まで巻き添えで狂う。
+ */
+const SKIP = "入れない";
+
 type Row = {
   source: ShoppingItem;
-  location: Location;
+  /** 置き場所。SKIP なら在庫に入れず、リストから消すだけ */
+  location: Location | typeof SKIP;
   qty: number;
   unit: string | null;
 };
@@ -121,24 +133,32 @@ export function MoveToInventorySheet({
    * 一覧から直接選ぶ形(select)に変えた。端末側の選択画面が出るので、
    * 1タップで5つとも見えて、押し間違えても選び直せる。
    */
-  const setLocation = (id: string, location: Location) =>
+  const setLocation = (id: string, location: Location | typeof SKIP) =>
     setRows((prev) =>
       prev.map((r) => (String(r.source.id) === id ? { ...r, location } : r)),
     );
 
+  const toStock = rows.filter((r) => r.location !== SKIP);
+
   const submit = async () => {
     setBusy(true);
     const today = todayISO();
-    await addMany(
-      rows.map((r) => ({
-        name: r.source.item,
-        qty: r.qty,
-        unit: r.unit,
-        location: r.location,
-        bought_on: today,
-      })),
-    );
-    // 買い終わった品目はリストから消す。次の買い物で使い回せるようにするため。
+    if (toStock.length > 0) {
+      await addMany(
+        toStock.map((r) => ({
+          name: r.source.item,
+          qty: r.qty,
+          unit: r.unit,
+          location: r.location as Location,
+          bought_on: today,
+        })),
+      );
+    }
+    /*
+     * 【在庫に入れなかったものも、リストからは消す】
+     * この画面の目的は「買い終えたものを片付ける」ことで、
+     * 在庫に入れるかどうかは、そのうちの一部の話でしかない。
+     */
     for (const r of rows) await removeShoppingItem(r.source.id);
     setBusy(false);
     onClose();
@@ -149,9 +169,11 @@ export function MoveToInventorySheet({
       <button type="button" aria-label="閉じる" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative max-h-[85dvh] overflow-y-auto rounded-t-2xl bg-white px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] dark:bg-neutral-900">
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
-        <h2 className="text-base font-bold">買った分を在庫に入れる</h2>
+        <h2 className="text-base font-bold">買い物をおわる</h2>
         <p className="mt-1 text-xs text-neutral-500">
-          置き場所は売り場から推測しています。違うものは右の欄で選び直してください。
+          チェックした {rows.length} 件をリストから片付けます。
+          しまうものは置き場所を選ぶと在庫に入り、
+          惣菜や日用品は<b>「入れない」</b>を選べば消えるだけです。
         </p>
         {/*
          * 推測の癖を先に言っておく。ここに書いていないと
@@ -180,14 +202,21 @@ export function MoveToInventorySheet({
               <select
                 aria-label={`${r.source.item}の置き場所`}
                 value={r.location}
-                onChange={(e) => setLocation(String(r.source.id), e.target.value as Location)}
-                className="h-11 w-[4.5rem] shrink-0 appearance-none rounded-lg bg-neutral-100 text-center text-xs font-bold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                onChange={(e) =>
+                  setLocation(String(r.source.id), e.target.value as Location | typeof SKIP)
+                }
+                className={`h-11 w-[5.5rem] shrink-0 appearance-none rounded-lg text-center text-xs font-bold ${
+                  r.location === SKIP
+                    ? "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
+                    : "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                }`}
               >
                 {LOCATIONS.map((loc) => (
                   <option key={loc} value={loc}>
                     {loc}
                   </option>
                 ))}
+                <option value={SKIP}>{SKIP}</option>
               </select>
             </li>
           ))}
@@ -203,8 +232,12 @@ export function MoveToInventorySheet({
           ))}
         </ul>
 
-        <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          登録すると、この {rows.length} 件は買い物リストから消えます。
+        <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          この {rows.length} 件は買い物リストから消えます。
+          {toStock.length > 0 && <>そのうち {toStock.length} 件が在庫に入ります。</>}
+          {toStock.length < rows.length && (
+            <>残り {rows.length - toStock.length} 件は在庫に入れず、消えるだけです。</>
+          )}
         </p>
 
         <div className="mt-4 flex gap-3">
@@ -221,7 +254,7 @@ export function MoveToInventorySheet({
             disabled={busy || rows.length === 0}
             className="h-14 flex-[2] rounded-xl bg-emerald-600 text-base font-bold text-white disabled:opacity-40"
           >
-            {busy ? "登録中…" : `${rows.length}件を在庫へ`}
+            {busy ? "片付け中…" : `${rows.length}件を片付ける`}
           </button>
         </div>
       </div>

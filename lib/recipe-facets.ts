@@ -38,12 +38,21 @@ function equipmentText(recipe: Recipe): string {
 }
 
 /**
+ * 電気の「鍋」。**名前に「鍋」が入るのに、火は一切使わない。**
+ *
+ * 器具の札(下の EQUIPMENT_FILTERS)と、火の判定(下の FIRE)の
+ * 両方がこれを見る。1か所にまとめてあるのは、片方だけ直すと
+ * また「書き方しだいで結果が変わる」に戻るため。
+ */
+const ELECTRIC_POT = "電気圧力鍋|電気鍋|クックポット|COK-?B400";
+
+/**
  * 器具の呼び名は1つに定まらない。
  * カードには商品名(「タイガー クックポット COK-B400」)で書いてあることも、
  * 一般名(「電気圧力鍋」)で書いてあることもある。両方を拾う。
  */
 export const EQUIPMENT_FILTERS: { label: string; match: RegExp }[] = [
-  { label: "電気圧力鍋", match: /電気圧力鍋|クックポット|COK-?B400/i },
+  { label: "電気圧力鍋", match: new RegExp(ELECTRIC_POT, "i") },
   { label: "エアオーブン", match: /エアー?オーブン|RAO-?1|ノンフライ/i },
   { label: "トースター", match: /トースター|アラジン|CAT-?GS13C/i },
   { label: "電子レンジ", match: /電子レンジ|レンジ/ },
@@ -57,7 +66,18 @@ export const EQUIPMENT_FILTERS: { label: string; match: RegExp }[] = [
  * コンロ・フライパン・鍋が出てこないことをもって「使わない」とみなす。
  * 【器具の行そのものが無いレシピは判定しない】。空文字に対しては
  * 「何も出てこない」が真になってしまい、全部が火を使わないことになる。
+ *
+ * 【電気の鍋を先に消してから見る】
+ * 「電気圧力鍋」には「鍋」の字が入っているので、そのまま /鍋/ を当てると
+ * 火を使う扱いになり、**「火を使わない」の絞り込みに出てこなかった。**
+ * しかも同じ機械でも、カードに商品名(クックポット COK-B400)で
+ * 書いてあるレシピだけは「鍋」の字が無いので出ていた。
+ * 同じ器具なのに、カードの書き方しだいで結果が変わっていたことになる。
+ *
+ * この絞り込みは「入れて放っておきたい」ために作ったもので、
+ * 電気圧力鍋こそ一番出したいレシピだった。それが一番出ていなかった。
  */
+const NOT_FIRE = new RegExp(ELECTRIC_POT, "gi");
 const FIRE = /コンロ|フライパン|鍋|グリル(?!パン)|魚焼き/;
 const NO_FIRE_DECLARED = /火を使わない|火は使わない/;
 
@@ -65,7 +85,9 @@ export function equipmentTagsOf(recipe: Recipe): string[] {
   const text = equipmentText(recipe);
   if (!text) return [];
   const tags = EQUIPMENT_FILTERS.filter((f) => f.match.test(text)).map((f) => f.label);
-  if (NO_FIRE_DECLARED.test(text) || !FIRE.test(text)) tags.push("火を使わない");
+  if (NO_FIRE_DECLARED.test(text) || !FIRE.test(text.replace(NOT_FIRE, ""))) {
+    tags.push("火を使わない");
+  }
   return tags;
 }
 

@@ -70,7 +70,12 @@ export function subscribe(listener: () => void) {
 export const getSnapshot = () => snapshot;
 export const getServerSnapshot = () => INITIAL;
 
-/** 期限が近いものを上に、次に場所→名前(設計書 3-3)。 */
+/**
+ * 期限が近いものを上に、次に名前(設計書 3-3)。
+ *
+ * 場所は並びに入れない。InventoryScreen が置き場所ごとの札で先に絞るので、
+ * 一覧に出るのはもともと同じ場所のものだけになる。
+ */
 export function sortInventory(items: InventoryItem[]): InventoryItem[] {
   return [...items].sort((a, b) => {
     const ea = a.expiry ?? "9999-12-31";
@@ -78,6 +83,20 @@ export function sortInventory(items: InventoryItem[]): InventoryItem[] {
     if (ea !== eb) return ea < eb ? -1 : 1;
     return a.name.localeCompare(b.name, "ja");
   });
+}
+
+/**
+ * 【pack_size は、値があるときだけ送る】
+ *
+ * この列は supabase/21_inventory_pack.sql を流すまで存在しない。
+ * 無い列を送ると PostgREST が 400 (PGRST204) を返し、**その行は1件も入らない。**
+ * 在庫の書き込みは冷蔵庫の前でやる操作なので、ここが落ちると一番困る。
+ *
+ * だから null のときは列そのものを送らない。
+ * SQL をまだ流していない家でも、個数を使わないかぎり今までどおり動く。
+ */
+function withPack<T extends object>(row: T, packSize: number | null | undefined): T {
+  return packSize == null ? row : { ...row, pack_size: packSize };
 }
 
 function setItems(items: InventoryItem[]) {
@@ -217,17 +236,22 @@ async function sendOp(op: InvOp) {
     if (!row) {
       const { data, error } = await supabase
         .from(TABLE)
-        .insert({
-          household_id: item.household_id,
-          name: item.name,
-          qty: item.qty,
-          unit: item.unit,
-          location: item.location,
-          expiry: item.expiry,
-          bought_on: item.bought_on,
-          price: item.price,
-          updated_at: item.updated_at,
-        })
+        .insert(
+          withPack(
+            {
+              household_id: item.household_id,
+              name: item.name,
+              qty: item.qty,
+              unit: item.unit,
+              location: item.location,
+              expiry: item.expiry,
+              bought_on: item.bought_on,
+              price: item.price,
+              updated_at: item.updated_at,
+            },
+            item.pack_size,
+          ),
+        )
         .select()
         .abortSignal(abortAfterTimeout())
         .single();
@@ -352,13 +376,24 @@ async function patchLocal(id: ItemId, patch: Partial<InventoryItem>) {
   return next;
 }
 
-/** +/- ボタン。0 未満にはしない(「使い切った」は削除で表す)。 */
+/**
+ * +/- ボタン。0 未満にはしない(「使い切った」は削除で表す)。
+ *
+ * 【満タン(pack_size)を超えて増やさない】
+ * 6Pチーズの「6個が最大」を、押している最中に守る。
+ * ただしデータベース側には上限を付けていない(21_inventory_pack.sql)。
+ * 2箱目を買って一時的に超えることがあり、そこで保存が弾かれると
+ * 冷蔵庫の前で書けなくなるほうが困る。**ボタンは案内、DBは牢屋にしない。**
+ * 箱を増やしたときは、詳細から満タンの数そのものを直す。
+ */
 export async function adjustQty(id: ItemId, delta: number) {
   const item = snapshot.items.find((i) => String(i.id) === String(id));
   if (!item) return;
   const current = item.qty ?? 0;
-  const next = Math.round((current + delta) * 10) / 10;
-  await patchLocal(id, { qty: Math.max(0, next) });
+  let next = Math.round((current + delta) * 10) / 10;
+  next = Math.max(0, next);
+  if (item.pack_size != null && delta > 0) next = Math.min(item.pack_size, next);
+  await patchLocal(id, { qty: next });
 }
 
 export async function setQty(id: ItemId, qty: number) {
@@ -382,10 +417,19 @@ export async function setExpiry(id: ItemId, expiry: string | null) {
  */
 export async function saveDetails(
   id: ItemId,
-  patch: { qty?: number; expiry?: string | null; location?: Location },
+  patch: {
+    qty?: number;
+    expiry?: string | null;
+    location?: Location;
+    /** 満タンのときの個数。null で「数えない」に戻す */
+    packSize?: number | null;
+  },
 ) {
   const next: Partial<InventoryItem> = {};
   if (patch.qty !== undefined) next.qty = Math.max(0, patch.qty);
+  // 列がまだ無い家では送らない(withPack と同じ理由)。null で消すのは、
+  // 一度でも入れたことがある = 列がある家に限られるので、そのまま送ってよい。
+  if (patch.packSize !== undefined) next.pack_size = patch.packSize;
   if (patch.expiry !== undefined) next.expiry = patch.expiry;
   if (patch.location !== undefined) next.location = patch.location;
   await patchLocal(id, next);
@@ -405,10 +449,26 @@ export type NewInventory = {
   expiry?: string | null;
   bought_on?: string | null;
   price?: number | null;
+  /** 満タンのときの個数。6Pチーズなら6。数えないものは省く */
+  packSize?: number | null;
 };
 
+/**
+ * 在庫を1点足す。
+ *
+ * 【満タンの数を、買ったときの数量から自動で入れる】
+ * これが無いと、残量スライダーは「満タンがいくつか」を知らないまま
+ * 動くことになり、食材ごとに人が数を入れて回ることになる。
+ * 買った時点の数量こそが満タンなので、そこから写せば入力は増えない。
+ * 6Pチーズを 6個 で足せば満タンは6、なす1袋を 3本 で足せば3。
+ *
+ * 列は integer なので、0.5本 のような数は切り上げる(元は1本だったはず)。
+ * 違っていたら、詳細の「満タンの数」から直せる。
+ */
 export async function addItem(input: NewInventory): Promise<InventoryItem> {
   const session = getSession();
+  const packSize =
+    input.packSize ?? (input.qty == null ? null : Math.max(1, Math.ceil(input.qty)));
   const row: InventoryItem = {
     id: `tmp_${crypto.randomUUID()}`,
     household_id: session.householdId ?? LOCAL_HOUSEHOLD_ID,
@@ -419,6 +479,7 @@ export async function addItem(input: NewInventory): Promise<InventoryItem> {
     expiry: input.expiry ?? null,
     bought_on: input.bought_on ?? null,
     price: input.price ?? null,
+    pack_size: packSize,
     updated_at: new Date().toISOString(),
   };
   await local.saveRows(STORE, [row]);

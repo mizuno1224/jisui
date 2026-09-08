@@ -5,6 +5,7 @@
 // 買い物リストや在庫と違い、これらは家の中で使う機能なので、
 // オフライン用の送信待ち行列は持たせていない。通信できないときは
 // その場で失敗を伝えて、後でやり直してもらうほうが分かりやすい。
+import { todayISO } from "./dates";
 import { markStale } from "./table-cache";
 import { getSnapshot as getSession } from "./store";
 import { getSupabase } from "./supabase/client";
@@ -765,29 +766,65 @@ export async function deleteTodo(id: number) {
 /**
  * 次の期限。
  *
- * 月末の扱いは予定の繰り返し(lib/event-labels.ts)と同じ。
- * 31日や 2/29 はその月に無いことがあるので、その月の最終日に寄せる
- * (月末の支払いは月末に出したい)。
- * 語彙は DB の todos_repeat_check と完全に揃えること。
+ * 【今日を追い越すまで進める】
+ * 1周期だけ進めていたため、毎日のやることを1週間ためてから「済み」を
+ * 押すと、期限が「昨日」に動くだけだった。まだ遅れているものとして残り、
+ * 全部片付けるのに7回押すことになる。そのうえ画面には
+ * 「次は 8/31(日) です」と**過ぎた日**が出ていた。
+ *
+ * 先の日付のものを早めに済ませたときは1周期だけ進む(追い越さない)。
+ *
+ * 【何周期ぶんかを数えて、必ず元の日から数え直す】
+ * 1周期ずつ足していくと、月の日付が【途中で落ちたまま戻らない】。
+ * 31日のものは 2月で28日に丸められ、そのあとは3月も4月も28日になる。
+ * 「月末の支払い」が月末でなくなり、しかも一度ずれたら二度と直らない。
+ * 予定の繰り返し(lib/event-labels.ts)は元の日から見ているので、
+ * こちらもそれに合わせる。
  */
 function nextDue(due: string, repeat: string): string | null {
-  const d = new Date(`${due}T00:00:00`);
-  const monthly = (months: number) => {
-    const day = d.getDate();
-    d.setDate(1);
-    d.setMonth(d.getMonth() + months);
+  const today = todayISO();
+  // 壊れた日付で回り続けないよう、数える回数に上限を置く(毎日なら約1年ぶん)。
+  for (let n = 1; n <= 400; n++) {
+    const candidate = addPeriods(due, repeat, n);
+    if (candidate == null) return null;
+    if (candidate > today) return candidate;
+  }
+  return null;
+}
+
+/**
+ * 元の期限から n 周期ぶん進めた日。繰り返しの語が分からなければ null。
+ *
+ * 月と年は、その月に無い日(31日・2/29)を**その月の最終日に寄せる**。
+ * 語彙は DB の todos_repeat_check と完全に揃えること。
+ */
+function addPeriods(due: string, repeat: string, n: number): string | null {
+  const base = new Date(`${due}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+
+  // 時刻の足し算ではなく日付で進める(夏時間のある地域でもずれないように)
+  const days = (perPeriod: number) => {
+    const d = new Date(base.getTime());
+    d.setDate(d.getDate() + perPeriod * n);
+    return d;
+  };
+  const months = (perPeriod: number) => {
+    const day = base.getDate();
+    const d = new Date(base.getFullYear(), base.getMonth() + perPeriod * n, 1);
     const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     d.setDate(Math.min(day, last));
+    return d;
   };
 
-  if (repeat === "毎日") d.setDate(d.getDate() + 1);
-  else if (repeat === "毎週") d.setDate(d.getDate() + 7);
-  else if (repeat === "隔週") d.setDate(d.getDate() + 14);
-  else if (repeat === "毎月") monthly(1);
-  else if (repeat === "毎年") monthly(12);
+  let d: Date;
+  if (repeat === "毎日") d = days(1);
+  else if (repeat === "毎週") d = days(7);
+  else if (repeat === "隔週") d = days(14);
+  else if (repeat === "毎月") d = months(1);
+  else if (repeat === "毎年") d = months(12);
   else return null;
 
-  const p = (n: number) => String(n).padStart(2, "0");
+  const p = (v: number) => String(v).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 

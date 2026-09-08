@@ -297,6 +297,39 @@ async function restockStaples(why) {
   if (err) log(`常備品(${why}): ${err}`);
 }
 
+/*
+ * 【止まっている間に置かれた「更新して」を片付ける】
+ *
+ * 「更新して」の合図を消しているのは、下の fs.watch の中だけだった。
+ * fs.watch は【動きだしたあとの変化】しか教えてくれないので、
+ * 常駐が止まっている間に置かれた合図は、誰も消さないまま残り続ける。
+ *
+ * 実際に 2026-09-01 に置かれた 更新して.txt が、9/06 まで5日間残っていた。
+ * 残っていても取り込みは止まらないが、置いた人には
+ * 「合図がまだ処理されていない」と見える。次に本当に更新したいときも、
+ * 同じ名前のファイルは【すでに在る】ので、置いても変化が起きず
+ * (fs.watch は内容の同じ上書きを rename として拾わないことがある)、
+ * 合図そのものが効かなくなる。
+ *
+ * 起動時の1回で消しておく。下の cycle("起動時") が書き出しまでやるので、
+ * 合図が求めていたこと(いまの状況.md を新しくする)はここで果たされる。
+ */
+function sweepRefreshSignals() {
+  for (const dir of INBOXES) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (!name.includes("更新して")) continue;
+      try {
+        unlinkSync(join(dir, name));
+        log(`止まっている間に置かれた合図を片付けました: ${join(dir, name)}`);
+      } catch {
+        /* もう消えていることがある */
+      }
+    }
+  }
+}
+sweepRefreshSignals();
+
 // 起動時に1回。パソコンを閉じている間に置かれたぶんを拾う。
 void cycle("起動時");
 

@@ -51,3 +51,6 @@ __pycache__/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase CLI が作る一時ファイル
+supabase/.temp/

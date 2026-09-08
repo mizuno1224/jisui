@@ -14,7 +14,9 @@ import {
   subscribe,
   syncNow,
 } from "@/lib/inventory-store";
+import { fullOf, remainLabel, snapQty, stepOf } from "@/lib/inventory-amount";
 import { looseMatch, normalizeText } from "@/lib/matching";
+import { useHorizontalSwipe } from "@/lib/use-swipe";
 import { useTable } from "@/lib/use-table";
 import {
   LOCATIONS,
@@ -106,8 +108,20 @@ function InventoryRow({
         >
           −
         </button>
-        <span className="w-14 text-center text-sm font-bold tabular-nums">
+        <span className="w-[4.5rem] text-center text-sm font-bold tabular-nums">
           {item.qty ?? "-"}
+          {/*
+            【何個入りかが分かっているものは「4 / 6」と出す】
+            6Pチーズやなす1袋のように、1つの袋に複数入っているものは、
+            残りの数だけ見ても「あと何回ぶんか」が分からなかった。
+            満タンの数を並べて出すと、開けた袋の残りが一目で分かる。
+            数えないもの(調味料・肉のグラム)は今までどおり数だけ。
+          */}
+          {item.pack_size != null && (
+            <span className="text-[11px] font-normal text-neutral-500 dark:text-neutral-400">
+              /{item.pack_size}
+            </span>
+          )}
           <span className="ml-0.5 text-[11px] font-normal text-neutral-500 dark:text-neutral-400">
             {item.unit ?? ""}
           </span>
@@ -132,6 +146,26 @@ export function InventoryScreen() {
   const snapshot = useInventory();
   const [tab, setTab] = useState<Location>("冷蔵");
   const [query, setQuery] = useState("");
+
+  /*
+   * 一覧を横に払うと隣の区画へ移る。
+   *
+   * 冷蔵庫の前では片手・濡れた指なので、画面の一番上にあるタブまで
+   * 親指を伸ばすのがつらい。一覧のどこを払っても移れるようにする。
+   * タブは残す(いま何番目のどこにいるかは、見えていないと分からない)。
+   *
+   * 【端で止める。回り込ませない。】常温の次が冷蔵に戻ると、
+   * 何周したのか分からなくなる。端に着いたら何も起きないほうがよい。
+   * 検索中はタブそのものが効かないので、払いも無効にする。
+   */
+  const swipe = useHorizontalSwipe((dir) => {
+    const i = LOCATIONS.indexOf(tab);
+    const next = LOCATIONS[i + dir];
+    if (next) {
+      setTab(next);
+      navigator.vibrate?.(8);
+    }
+  }, !query.trim());
   const [target, setTarget] = useState<InventoryItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -205,8 +239,24 @@ export function InventoryScreen() {
   const inStock = byLocation.filter((i) => (i.qty ?? 0) > 0);
   const outOfStock = byLocation.filter((i) => (i.qty ?? 0) === 0);
 
+  /*
+   * 期限が近いものの件数。
+   *
+   * 【数量0の行は数えない】
+   * 使い切ったものは行を消さずに 0 で残している(いつ何を切らしたかが
+   * 買い物の手がかりになるため)。ところがこの警告は数量を見ていなかったので、
+   * **もう無い食材の期限まで赤で数えていた。**
+   * 実測(2026-09-09)で「19点」と出ていたうち9点が数量0で、
+   * 8/28 のもやし、8/30 の巻寿司まで数に入っていた。
+   *
+   * すぐ上の「49点」は数量0を除いて数えているので、同じ画面の中で
+   * 数え方が2通りあることにもなっていた。
+   *
+   * 食べ切ったものを警告し続けると、やがて赤帯そのものを見なくなる。
+   * 一覧が畳んでいる行は、警告でも数えない。
+   */
   const soon = snapshot.items.filter(
-    (i) => i.expiry && daysUntil(i.expiry) <= 3,
+    (i) => (i.qty ?? 0) > 0 && i.expiry && daysUntil(i.expiry) <= 3,
   ).length;
 
   return (
@@ -304,50 +354,52 @@ export function InventoryScreen() {
         )}
       </ScreenHeader>
 
-      <LoadNotice
-        loading={snapshot.status === "loading"}
-        error={snapshot.error}
-        empty={inStock.length === 0}
-        emptyText={
-          query.trim()
-            ? `「${query.trim()}」は見つかりませんでした。`
-            : // 「氷温は空です」だとどの引き出しの話か伝わらないので正式名で出す。
-              // 移行直後の氷温は 0 件が正常(12_schema_v6.sql:288)。壊れて見えないように。
-              `${LOCATION_INFO[tab].full}は空です。右下の + で追加できます。`
-        }
-      />
+      <div {...swipe}>
+        <LoadNotice
+          loading={snapshot.status === "loading"}
+          error={snapshot.error}
+          empty={inStock.length === 0}
+          emptyText={
+            query.trim()
+              ? `「${query.trim()}」は見つかりませんでした。`
+              : // 「氷温は空です」だとどの引き出しの話か伝わらないので正式名で出す。
+                // 移行直後の氷温は 0 件が正常(12_schema_v6.sql:288)。壊れて見えないように。
+                `${LOCATION_INFO[tab].full}は空です。右下の + で追加できます。`
+          }
+        />
 
-      <ul className="mt-3 divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
-        {inStock.map((item) => (
-          <InventoryRow
-            key={String(item.id)}
-            item={item}
-            plannedUse={plannedUseOf(item.name)}
-            showLocation={Boolean(query.trim())}
-            onOpen={setTarget}
-          />
-        ))}
-      </ul>
+        <ul className="mt-3 divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
+          {inStock.map((item) => (
+            <InventoryRow
+              key={String(item.id)}
+              item={item}
+              plannedUse={plannedUseOf(item.name)}
+              showLocation={Boolean(query.trim())}
+              onOpen={setTarget}
+            />
+          ))}
+        </ul>
 
-      {/* 切らしているものは畳んでおく。消してはいない(買い物の手がかりとして残す) */}
-      {outOfStock.length > 0 && (
-        <details className="mt-3 border-y border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-          <summary className="cursor-pointer px-4 py-3.5 text-sm font-medium text-neutral-500 dark:text-neutral-400">
-            切らしているもの {outOfStock.length} 件
-          </summary>
-          <ul className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
-            {outOfStock.map((item) => (
-              <InventoryRow
-                key={String(item.id)}
-                item={item}
-                plannedUse={plannedUseOf(item.name)}
-                showLocation={Boolean(query.trim())}
-                onOpen={setTarget}
-              />
-            ))}
-          </ul>
-        </details>
-      )}
+        {/* 切らしているものは畳んでおく。消してはいない(買い物の手がかりとして残す) */}
+        {outOfStock.length > 0 && (
+          <details className="mt-3 border-y border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+            <summary className="cursor-pointer px-4 py-3.5 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+              切らしているもの {outOfStock.length} 件
+            </summary>
+            <ul className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+              {outOfStock.map((item) => (
+                <InventoryRow
+                  key={String(item.id)}
+                  item={item}
+                  plannedUse={plannedUseOf(item.name)}
+                  showLocation={Boolean(query.trim())}
+                  onOpen={setTarget}
+                />
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
 
       <button
         type="button"
@@ -390,8 +442,18 @@ function ItemActionSheet({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [qty, setQtyInput] = useState(String(item.qty ?? ""));
   const [expiry, setExpiryInput] = useState(item.expiry ?? "");
+  const [packSize, setPackSizeInput] = useState(String(item.pack_size ?? ""));
+  /*
+   * 満タンの数。入力欄が空や壊れた値のときは、いまの記録から決める。
+   * スライダーの上限になるので、null のままにはできない。
+   */
+  const typedFull = Math.floor(Number(packSize));
+  const full =
+    packSize.trim() !== "" && !Number.isNaN(typedFull) && typedFull >= 1
+      ? typedFull
+      : fullOf(item);
+  const [qtyNum, setQtyNum] = useState(() => snapQty(item.qty ?? 0, fullOf(item)));
   // 以前は押した瞬間に保存していたので、そのまま閉じても場所だけ変わっていた。
   // 数量・期限と同じく「保存」で確定する。
   const [location, setLocationInput] = useState<Location>(item.location);
@@ -403,14 +465,66 @@ function ItemActionSheet({
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
         <p className="mb-4 text-center text-base font-bold">{item.name}</p>
 
-        <div className="flex gap-3">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-neutral-500">数量</label>
+        {/*
+         * 【残りはスライダーで決める】
+         *
+         * 数を打ち込ませると、単位が食材ごとに違うぶん毎回考えることになる
+         * (6Pチーズは個、牛乳は本、肉はグラム)。
+         * 「満タンのうちどれだけ残っているか」に揃えれば、どの食材でも同じ手つきで済む。
+         * 目盛りの細かさは満タンの数から決まる(lib/inventory-amount.ts)。
+         */}
+        <div>
+          <div className="flex items-baseline justify-between">
+            <label className="text-xs font-medium text-neutral-500">残り</label>
+            <span className="text-base font-bold tabular-nums">
+              {remainLabel(qtyNum, full, item.unit)}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={full}
+            step={stepOf(full)}
+            value={qtyNum}
+            onChange={(e) => setQtyNum(snapQty(Number(e.target.value), full))}
+            aria-label={`${item.name}の残り`}
+            className="mt-2 h-11 w-full accent-emerald-600"
+          />
+          {/* 端を1タップで。スライダーは端ぴったりに合わせにくい */}
+          <div className="mt-1 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setQtyNum(0)}
+              className="h-10 flex-1 rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+            >
+              空にする
+            </button>
+            <button
+              type="button"
+              onClick={() => setQtyNum(snapQty(full / 2, full))}
+              className="h-10 flex-1 rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+            >
+              半分
+            </button>
+            <button
+              type="button"
+              onClick={() => setQtyNum(full)}
+              className="h-10 flex-1 rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+            >
+              満タン
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex gap-3">
+          <div className="w-28">
+            <label className="block text-xs font-medium text-neutral-500">満タンの数</label>
             <input
               type="number"
-              inputMode="decimal"
-              value={qty}
-              onChange={(e) => setQtyInput(e.target.value)}
+              inputMode="numeric"
+              min={1}
+              value={packSize}
+              onChange={(e) => setPackSizeInput(e.target.value)}
               className="mt-1 h-12 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base dark:border-neutral-700 dark:bg-neutral-800"
             />
           </div>
@@ -424,6 +538,11 @@ function ItemActionSheet({
             />
           </div>
         </div>
+        <p className="mt-1 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+          <b>満タンの数</b>は、袋や箱が開いていないときの数です。
+          6Pチーズなら 6、なす1袋(3本入り)なら 3、牛乳1本なら 1。
+          買ったときの数量から自動で入るので、違うときだけ直してください。
+        </p>
 
         <div className="mt-3">
           <label className="block text-xs font-medium text-neutral-500">場所</label>
@@ -453,11 +572,13 @@ function ItemActionSheet({
         <button
           type="button"
           onClick={() => {
-            const n = Number(qty);
             void saveDetails(item.id, {
-              qty: Number.isNaN(n) ? undefined : n,
+              // 満タンを小さく直したときは、残りもその中に収める
+              qty: Math.min(qtyNum, full),
               expiry: expiry || null,
               location,
+              // 満タンはスライダーの上限そのもの。ここで必ず記録に残す
+              packSize: full,
             });
             onDone();
           }}

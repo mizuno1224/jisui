@@ -20,6 +20,13 @@
  * リストから消しても5分後に戻ってくる。リストが自分のものでなくなる。
  * 前回の状態を覚えておき、【ある → 切らした に変わったときだけ】足す。
  *
+ * 【アプリ側にも同じ判定がある】
+ * このスクリプトはパソコンでしか動かない(watch-inbox.mjs が python 越しに回す)。
+ * パソコンが寝ている週末は一切効かないので、判定は lib/staples.ts にも置いて、
+ * 買い物リストの画面が「切らしている常備品」の札を出すようにしてある。
+ * **規則を変えるときは両方を直すこと。** 片方だけ直すと、
+ * パソコンとスマホで「切れている」の答えが食い違う。
+ *
  * 【使い方】
  *   node scripts/restock-staples.mjs           下見。何も書かない
  *   node scripts/restock-staples.mjs --apply   実際に足す
@@ -101,8 +108,21 @@ const prev = existsSync(STATE)
 // まず今の状態を覚えるだけにして、次に切らしたときから効かせる。
 const first = Object.keys(prev).length === 0;
 
+/*
+ * 【リストに「まだ買っていない行」があるか】
+ *
+ * ここは長いあいだ status !== "購入済み" と書いてあった。
+ * この表が取る値は 未購入 / 購入済 の2つだけで(lib/types.ts の ItemStatus、
+ * supabase/01_schema.sql の check も同じ)、**「購入済み」という値は存在しない。**
+ * だから条件は常に真になり、【買い終えてチェックが付いたままの行】まで
+ * 「まだリストに載っている」と数えていた。
+ *
+ * 買った行はリストに残り続けるので、一度買った常備品は
+ * そこから先どれだけ切らしても二度と足されない。
+ * 「切らしたら自動で戻ってくる」はずの仕掛けが、まるごと効いていなかった。
+ */
 const already = (name) =>
-  data.shopping.some((s) => s.status !== "購入済み" && looseMatch(s.item ?? "", name));
+  data.shopping.some((s) => s.status === "未購入" && looseMatch(s.item ?? "", name));
 
 const toAdd = first
   ? []

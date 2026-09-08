@@ -23,13 +23,32 @@ import type { MealPlan, Recipe, RecipeIngredient } from "@/lib/types";
  */
 const CATEGORY_ORDER = ["主菜", "主食", "副菜", "汁物", "その他"];
 
+/**
+ * 冷凍弁当。**料理の種類ではなく、作る目的が違う。**
+ *
+ * 【なぜ普段のごはんと分けるのか】
+ * 冷凍弁当は「2〜3品を1つの容器に詰めて、まとめて凍らせ、レンジで温めて食べる」
+ * 1食まるごとの設計で、夕食に1品を作るのとは考えることが違う。
+ * 詰める前に冷ますとか、豆腐とじゃがいもは入れないとか、
+ * 守らないと味ではなく**安全**の問題になる決まりもある(「冷凍弁当の作り方」)。
+ *
+ * それが 主菜・主食・副菜・その他 に散らばっていたので、
+ * 献立を組むときは弁当が混ざり、弁当を仕込むときは普段の料理から探す
+ * ことになっていた。**一番上で世界を2つに分ける。**
+ *
+ * ここに入れるのは【1食ぶんのセット】と、その手引きだけ。
+ * 「鶏の甘辛煮」のように、普段の夕食にもなるおかずは 主菜 のまま置く
+ * (弁当の中身として使いつつ、夕食にも出せる)。
+ */
+const BENTO = "冷凍弁当";
+
 /** 「帰りが遅い日でも作れる」の線。カードの調理時間(time_min)で切る。 */
 const QUICK_MIN = 10;
 
 type PantryRow = { id: number; name: string; stock: string };
 
 export function RecipeListScreen() {
-  const { rows, loading, error } = useTable<Recipe>("recipes", { orderBy: "name" });
+  const { rows: allRows, loading, error } = useTable<Recipe>("recipes", { orderBy: "name" });
   // 冷蔵庫に残った食材から引けるようにする。台所で一番やりたい探し方。
   const ingredients = useTable<RecipeIngredient>("recipe_ingredients");
   // 「いま作れる」を出すために在庫と常備品を読む。判定は RecipeDetailScreen と同じ
@@ -41,6 +60,20 @@ export function RecipeListScreen() {
   useEffect(() => {
     void initInventory();
   }, []);
+
+  /*
+   * 見ている世界。普段のごはん か 冷凍弁当 か。
+   * 以降のすべて(分類の札・件数・絞り込み)は、選んだ側の中だけで動く。
+   */
+  const [world, setWorld] = useState<"日常" | "弁当">("日常");
+  const rows = useMemo(
+    () => allRows.filter((r) => (r.category === BENTO) === (world === "弁当")),
+    [allRows, world],
+  );
+  const bentoCount = useMemo(
+    () => allRows.filter((r) => r.category === BENTO).length,
+    [allRows],
+  );
 
   const searchIndex = useMemo(() => {
     const map = new Map<number, string>();
@@ -77,6 +110,7 @@ export function RecipeListScreen() {
     };
     return [...count.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
   }, [rows]);
+
 
   const [todayOnly, setTodayOnly] = useState(false);
   const [category, setCategory] = useState<string | null>(null);
@@ -205,6 +239,35 @@ export function RecipeListScreen() {
           </>
         }
       >
+        {/*
+         * 【一番上で世界を分ける】
+         * 普段の献立を組むときに弁当が混ざらず、弁当を仕込むときに
+         * 普段の料理を掻き分けずに済む。切り替えたら絞り込みは白紙に戻す
+         * (「主菜」で絞ったまま弁当側に移ると、0件の画面から始まってしまう)。
+         */}
+        <div className="mt-2 flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800">
+          {(["日常", "弁当"] as const).map((w) => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => {
+                setWorld(w);
+                clearAll();
+              }}
+              className={`h-11 flex-1 rounded-lg text-sm font-bold transition-colors ${
+                world === w
+                  ? "bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-neutral-50"
+                  : "text-neutral-500"
+              }`}
+            >
+              {w === "日常" ? "普段のごはん" : "冷凍弁当"}
+              <span className="ml-1 text-xs font-normal text-neutral-500 dark:text-neutral-400">
+                {w === "日常" ? allRows.length - bentoCount : bentoCount}
+              </span>
+            </button>
+          ))}
+        </div>
+
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -217,7 +280,8 @@ export function RecipeListScreen() {
           <FilterChip active={noFilter} onClick={clearAll}>
             すべて
           </FilterChip>
-          {categories.map(([c, n]) => (
+          {/* 種類が1つしかない側(冷凍弁当)では、押しても何も変わらないので出さない */}
+          {categories.length > 1 && categories.map(([c, n]) => (
             <FilterChip
               key={c}
               active={category === c}

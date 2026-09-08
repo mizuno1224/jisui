@@ -1,12 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { AddItemSheet } from "@/components/AddItemSheet";
 import { MoveToInventorySheet } from "@/components/MoveToInventorySheet";
+import { ShortStaplesCard } from "@/components/ShortStaplesCard";
 import { StatusChips } from "@/components/StatusChips";
 import { ItemRow } from "@/components/ItemRow";
 import { Snackbar } from "@/components/Snackbar";
+import {
+  getServerSnapshot as invServer,
+  getSnapshot as invSnapshot,
+  init as initInventory,
+  subscribe as subscribeInventory,
+} from "@/lib/inventory-store";
 import {
   ALL_SECTIONS,
   SALE_SECTION,
@@ -24,7 +38,9 @@ import {
   toggle,
   type NewItem,
 } from "@/lib/store";
-import type { ShoppingItem } from "@/lib/types";
+import { dismissAll, pruneDismissed, shortStaples } from "@/lib/staples";
+import type { Pantry, ShoppingItem } from "@/lib/types";
+import { useTable } from "@/lib/use-table";
 import { useShoppingStore } from "@/lib/use-store";
 
 export function ShoppingListScreen() {
@@ -39,6 +55,19 @@ export function ShoppingListScreen() {
   // 店内を歩いている間、相手のチェックを取りに行く。
   // 何もタップしないと同期のきっかけが無く、同じ物を2人が買ってしまう。
   useEffect(() => startPolling(), []);
+
+  /*
+   * 常備品を切らしていないかを見るために、常備品と在庫も読む。
+   *
+   * どちらも手元(IndexedDB)から先に出るので、圏外の店内でも札は出る。
+   * 表そのものは小さい(常備品60行ほど・在庫50行ほど)ので、
+   * レシートの明細のように重くはならない。
+   */
+  const pantry = useTable<Pantry>("pantry");
+  const inventory = useSyncExternalStore(subscribeInventory, invSnapshot, invServer);
+  useEffect(() => {
+    void initInventory();
+  }, []);
 
   const { items, userId, members } = snapshot;
 
@@ -76,6 +105,33 @@ export function ShoppingListScreen() {
   const checkedItems = items.filter((i) => i.status === "購入済");
   const done = counted.length - remaining;
   const progress = counted.length === 0 ? 0 : (done / counted.length) * 100;
+
+  /*
+   * 切らしている常備品。
+   *
+   * 常備品は買い物リストに載せない決まりなので、切らしても気づく道が無い。
+   * ここで札にして、載せるかどうかは人に決めてもらう(lib/staples.ts)。
+   *
+   * 【まだ読めていないうちは何も出さない】。dismissed が null の間は
+   * 「あとで」と閉じたぶんが分からないので、閉じたはずの札が一瞬出てしまう。
+   */
+  const [dismissed, setDismissed] = useState<number[] | null>(null);
+  const short = useMemo(
+    () => shortStaples(pantry.rows, inventory.items, items),
+    [pantry.rows, inventory.items, items],
+  );
+  useEffect(() => {
+    let alive = true;
+    // もう切らしていないものを覚えから落とす。IndexedDB の読みが1回入るが、
+    // チェックを1つ押すのに走る処理と比べれば誤差の範囲。
+    void pruneDismissed(short).then((next) => {
+      if (alive) setDismissed(next);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [short]);
+  const shortToShow = dismissed == null ? [] : short.filter((s) => !dismissed.includes(s.id));
 
   const labelFor = (item: ShoppingItem): string | null => {
     if (!item.checked_by) return null;
@@ -137,7 +193,7 @@ export function ShoppingListScreen() {
                       }}
                       className="block h-12 w-full border-b border-neutral-100 px-4 text-left text-sm font-semibold text-emerald-700 active:bg-neutral-100 dark:border-neutral-700 dark:text-emerald-400 dark:active:bg-neutral-700"
                     >
-                      買った分を在庫に入れる({checkedItems.length})
+                      買い物をおわる({checkedItems.length})
                     </button>
                   )}
                   <Link
@@ -198,6 +254,15 @@ export function ShoppingListScreen() {
           </div>
         )}
       </header>
+
+      {/* 切らしている常備品。リストが空のときにも出す(空のときこそ見たい) */}
+      {shortToShow.length > 0 && (
+        <ShortStaplesCard
+          items={shortToShow}
+          onDismiss={() => void dismissAll(short).then(setDismissed)}
+        />
+      )}
+
 
       {items.length === 0 ? (
         <p className="px-6 py-20 text-center text-sm text-neutral-500 dark:text-neutral-400">
@@ -265,6 +330,32 @@ export function ShoppingListScreen() {
               </section>
             );
           })}
+
+          {/*
+           * 【買い終えたものを片付ける口を、リストの中に置く】
+           *
+           * これは前からメニュー(⋮)の中にしか無かった。開かない人には
+           * 存在しないのと同じで、チェックの付いた行がリストに残り続ける。
+           * 残った行は「まだ買っていないもの」として数えられるので、
+           * 常備品の切らし判定(lib/staples.ts)まで巻き添えで狂っていた。
+           *
+           * チェックが1つでもあれば出す。買い終える前でも押せてよい
+           * (先に冷蔵庫へ入れたいものだけ片付ける、という使い方をする)。
+           */}
+          {checkedItems.length > 0 && (
+            <div className="px-4 pb-2 pt-4">
+              <button
+                type="button"
+                onClick={() => setMoveOpen(true)}
+                className="h-14 w-full rounded-xl bg-emerald-600 text-base font-bold text-white active:bg-emerald-700"
+              >
+                買い物をおわる(チェック済み {checkedItems.length} 件)
+              </button>
+              <p className="mt-1.5 text-center text-[11px] text-neutral-500 dark:text-neutral-400">
+                しまうものは在庫へ、惣菜や日用品は消すだけにできます
+              </p>
+            </div>
+          )}
         </div>
       )}
 

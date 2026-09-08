@@ -101,6 +101,12 @@ export type InventoryItem = {
   expiry: string | null;
   bought_on: string | null;
   price: number | null;
+  /**
+   * 満タンのときの個数。6Pチーズなら6、なす1袋(3本入り)なら3。
+   * qty は【いま残っている個数】。数えないもの(調味料・肉のグラム)は null。
+   * supabase/21_inventory_pack.sql
+   */
+  pack_size: number | null;
   updated_at: string;
 };
 

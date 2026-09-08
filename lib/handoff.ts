@@ -17,6 +17,25 @@ import * as local from "@/lib/local-db";
  */
 
 export const HANDOFF_KIND = "jisui-handoff";
+/** 形を変えたら上げる。cowork/jisui/db.py の HANDOFF_VERSION と揃える。 */
+export const HANDOFF_VERSION = 1;
+
+/**
+ * この画面が扱える操作。**下の applyOne の case と揃えること。**
+ *
+ * 型にしてあるのは、頼む側の文章(lib/handoff-prompt.ts)を道連れにするため。
+ * op を足してここに書くと、あちらの説明が欠けている間は tsc が落ちる。
+ * 揃っていないと、チャットは正しいつもりで、入らない JSON を返し続ける。
+ */
+export type HandoffOp =
+  | "add_receipt"
+  | "import_card_row"
+  | "add_shopping"
+  | "add_event"
+  | "add_todo"
+  | "add_rule"
+  | "add_checkup"
+  | "insert";
 
 /** 入れなかったが、失敗ではないもの。すでに同じものがある場合など。 */
 class SkipError extends Error {}
@@ -36,25 +55,69 @@ export type Handoff = {
   records: HandoffRecord[];
 };
 
-/** 貼られた文字列を読む。コードブロックの ``` が付いていても剥がす。 */
+/**
+ * 貼られた文字列から、受け渡し JSON の部分だけを拾い出す。
+ *
+ * 【前後に文章が付いてくる前提で読む】
+ * アプリが配る依頼文(lib/handoff-prompt.ts)は、チャットに
+ * 「JSON はコードブロックに入れて、**説明はその外に書く**」と頼んでいる。
+ * つまり返事には必ず前後に文章が付く。スマホで返事をまるごとコピーすると
+ * それがそのまま貼られるので、全体を JSON として読もうとすると必ず落ちる。
+ * こちらから文章を書けと頼んでおきながら、その形を読めないのは筋が通らない。
+ *
+ * 試す順番は、素のまま → コードブロックの中 → いちばん外側の { … }。
+ * **素のままを先に試す**ので、いま読めている貼り方の結果は変わらない。
+ */
+function* jsonCandidates(s: string): Generator<string> {
+  yield s;
+  // ```json … ``` は文章のどこにあってもよい。複数あれば順に試す。
+  for (const m of s.matchAll(/```[a-zA-Z]*[ \t]*\r?\n([\s\S]*?)```/g)) {
+    const body = m[1].trim();
+    if (body) yield body;
+  }
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) yield s.slice(start, end + 1);
+}
+
+/** 貼られた文字列を読む。前後の文章やコードブロックの ``` が付いていても剥がす。 */
 export function parseHandoff(text: string): { ok: true; value: Handoff } | { ok: false; why: string } {
-  let s = text.trim();
-  // ```json … ``` で囲まれて渡されることが多い。剥がしてから読む。
-  const fence = s.match(/^```[a-zA-Z]*\n([\s\S]*?)\n?```$/);
-  if (fence) s = fence[1].trim();
+  const s = text.trim();
   if (!s) return { ok: false, why: "何も貼られていません。" };
 
-  let data: unknown;
-  try {
-    data = JSON.parse(s);
-  } catch (e) {
+  /*
+   * 読めたもののうち【受け渡し JSON を優先して選ぶ】。
+   * 献立の相談などで、チャットが別のコードブロック(レシピの表など)を
+   * 先に出すことがある。先に読めたほうを採ると、それを見て
+   * 「これは受け渡し JSON ではない」と言ってしまい、
+   * 下に本物があるのに気づけない。
+   */
+  let picked: unknown;
+  let firstError: string | null = null;
+  for (const candidate of jsonCandidates(s)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(candidate);
+    } catch (e) {
+      firstError ??= e instanceof Error ? e.message : String(e);
+      continue;
+    }
+    if (value && typeof value === "object" && (value as Handoff).kind === HANDOFF_KIND) {
+      picked = value;
+      break;
+    }
+    picked ??= value;
+  }
+
+  if (picked === undefined) {
     return {
       ok: false,
       why:
-        `JSON として読めません: ${e instanceof Error ? e.message : String(e)}\n` +
+        `JSON として読めません: ${firstError ?? "中身がありません"}\n` +
         "チャットの返事のうち、{ で始まって } で終わる部分だけを貼ってください。",
     };
   }
+  const data = picked;
   if (!data || typeof data !== "object") return { ok: false, why: "中身が空です。" };
   const h = data as Handoff;
   if (h.kind !== HANDOFF_KIND) {
@@ -108,13 +171,51 @@ export function describeRecord(r: HandoffRecord): string {
   }
 }
 
-/** date|amount|merchant_raw の SHA-256。db.py の dedup_hash と同じ計算。 */
-async function dedupHash(date: string, amount: number, merchant: string): Promise<string> {
-  const src = `${date}|${amount}|${merchant}`;
+async function sha256hex(src: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(src));
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/** date|amount|merchant_raw の SHA-256。db.py の dedup_hash と同じ計算。 */
+async function dedupHash(date: string, amount: number, merchant: string): Promise<string> {
+  return sha256hex(`${date}|${amount}|${merchant}`);
+}
+
+/**
+ * 中身から必ず同じ文字列を作る。鍵のもとにする。
+ *
+ * 【鍵に時刻を入れない】
+ * 入れると、同じ内容を2回書き出しただけで別物になり、二重に入る。
+ * cowork/jisui/db.py の _canonical と同じ形にしてあるので、
+ * スキルが付けた鍵と、ここで作る鍵は、同じ中身なら同じになる。
+ */
+function canonical(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const body = Object.keys(obj)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`)
+    .join(",");
+  return `{${body}}`;
+}
+
+/**
+ * 1件ごとの鍵。**無ければ中身から作る。**
+ *
+ * 【なぜ作るのか】
+ * 鍵を付けてくれるのはスキルを積んだチャットだけ。
+ * アプリが配る依頼文(lib/handoff-prompt.ts)で書かせた JSON には鍵が無い。
+ * 鍵が無いと「この端末で入れ済み」の控えが効かず、
+ * 同じものを2回貼ると、予定もやることも買い物も二重に入る。
+ * レシートとレシピは DB 側にも守りがあるが、ほかは何も無い。
+ */
+export async function handoffKeys(h: Handoff): Promise<string[]> {
+  return Promise.all(
+    h.records.map((r) => (r.key ? Promise.resolve(r.key) : sha256hex(`${r.op}|${canonical(r.args)}`))),
+  );
 }
 
 const APPLIED_KEY = "handoff_applied_keys";
@@ -129,9 +230,17 @@ async function markApplied(keys: string[]) {
   await local.setMeta(APPLIED_KEY, [...cur, ...keys].slice(-300));
 }
 
-export async function alreadyApplied(h: Handoff): Promise<string[]> {
+/**
+ * 何番目の記録が「この端末で入れ済み」か。
+ *
+ * 鍵の一覧ではなく **並び順の真偽** を返す。鍵は無いことがあり
+ * (依頼文で書かせた JSON には付かない)、鍵で照合する側は
+ * handoffKeys をもう一度呼ぶことになって、同じ SHA-256 を2回計算していた。
+ */
+export async function appliedFlags(h: Handoff): Promise<boolean[]> {
   const applied = new Set(await loadApplied());
-  return h.records.filter((r) => r.key && applied.has(r.key)).map((r) => r.key!);
+  const keys = await handoffKeys(h);
+  return keys.map((k) => applied.has(k));
 }
 
 /**
@@ -147,25 +256,27 @@ export async function applyHandoff(
   if (!householdId) throw new Error("世帯が分かりません。ログインし直してください。");
 
   const applied = new Set(await loadApplied());
+  const keys = await handoffKeys(h);
   const done: string[] = [];
   const skipped: string[] = [];
   const failed: { what: string; why: string }[] = [];
   const newKeys: string[] = [];
 
-  for (const r of h.records) {
+  for (const [i, r] of h.records.entries()) {
     const what = describeRecord(r);
-    if (r.key && applied.has(r.key)) {
+    const key = keys[i];
+    if (applied.has(key)) {
       skipped.push(`${what} — この端末で入れ済み`);
       continue;
     }
     try {
       await applyOne(r, householdId, supabase);
       done.push(what);
-      if (r.key) newKeys.push(r.key);
+      newKeys.push(key);
     } catch (e) {
       if (e instanceof SkipError) {
         skipped.push(`${what} — ${e.message}`);
-        if (r.key) newKeys.push(r.key);
+        newKeys.push(key);
         continue;
       }
       failed.push({ what, why: e instanceof Error ? e.message : String(e) });
@@ -182,6 +293,7 @@ async function applyOne(r: HandoffRecord, householdId: string, supabase: Client)
   const str = (k: string) => (a[k] == null ? null : String(a[k]));
   const num = (k: string) => (a[k] == null ? null : Number(a[k]));
 
+  // case を足したら HandoffOp にも足すこと(そこから頼む側の説明までつながっている)。
   switch (r.op) {
     case "add_receipt":
     case "import_card_row": {

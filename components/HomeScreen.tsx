@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { addDays, currentMonth, daysUntil, todayISO, weekdayOf, WEEKDAY_LABELS, yen } from "@/lib/dates";
 import { occursOn } from "@/lib/event-labels";
@@ -17,6 +17,7 @@ import {
   type Screening,
   type Vitals,
 } from "@/lib/health";
+import { markCooked, setMealStatus } from "@/lib/mutations";
 import { getServerSnapshot, getSnapshot, init, signOut, subscribe } from "@/lib/store";
 import {
   getServerSnapshot as invServerSnapshot,
@@ -131,6 +132,68 @@ export function HomeScreen() {
     () => plans.rows.filter((p) => p.date === today && p.status !== "中止"),
     [plans.rows, today],
   );
+
+  /*
+   * 【過ぎた日なのに「予定」のまま】
+   *
+   * 作った記録を入れれば献立は自動で「実施」になる(cook_log_marks_plan)。
+   * だが【何も記録しなかった日】は誰も触らないので、いつまでも「予定」で残る。
+   * 実測(2026-09-06)で 8/13 まで遡って10件たまっていた。
+   *
+   * これが溜まると、献立を組み直すときに「まだ作っていないもの」として読まれ、
+   * 済んだ料理がもう一度並ぶ。いまはチャット側(write-context.mjs)が
+   * 「確認が要ること」として出し、そのたびに人へ聞いて回っている。
+   *
+   * 【アプリで片付けられる場所をここに作る】。カレンダーの その日 を開けば
+   * 前から「作った」は押せたが、8/13 をわざわざ開きに行く人はいない。
+   * 開いてすぐ目に入るところに置いて、1タップで終わらせる。
+   *
+   * **こちらで勝手に決めない。** 作ったかどうかは本人にしか分からないので、
+   * 「作った」と「作らなかった」の両方を出して、選ばせる。
+   */
+  const stalePlans = useMemo(
+    () =>
+      plans.rows
+        .filter((p) => p.date < today && p.status === "予定")
+        .sort((a, b) => a.date.localeCompare(b.date)),
+    [plans.rows, today],
+  );
+
+  /*
+   * 一度に出すのは5件まで。片付けると次が繰り上がってくるので、
+   * 全部は消せる。10件を全部並べるとホームがこの一覧で埋まる。
+   */
+  const STALE_SHOWN = 5;
+  const [busyPlan, setBusyPlan] = useState<number | null>(null);
+  const [staleError, setStaleError] = useState<string | null>(null);
+
+  const recipeNameById = useMemo(
+    () => new Map(recipes.rows.map((r) => [r.id, r.name])),
+    [recipes.rows],
+  );
+
+  const resolveStale = async (plan: MealPlan, cooked: boolean) => {
+    setBusyPlan(plan.id);
+    setStaleError(null);
+    try {
+      if (cooked) {
+        // 「作った」は cook_log にも残す。家計の「1食あたり」がこの件数で割るため。
+        await markCooked({
+          planId: plan.id,
+          recipeId: plan.recipe_id,
+          name: plan.name ?? (plan.recipe_id != null ? recipeNameById.get(plan.recipe_id) : null) ?? "(記録)",
+          date: plan.date,
+        });
+      } else {
+        // 消さずに「中止」にする。いつ何を作らなかったかは残しておきたい。
+        await setMealStatus(plan.id, "中止");
+      }
+    } catch (e) {
+      setStaleError(e instanceof Error ? e.message : "保存できませんでした");
+    } finally {
+      setBusyPlan(null);
+    }
+  };
 
   const todayChores = useMemo(() => {
     const wd = weekdayOf(today);
@@ -399,6 +462,56 @@ export function HomeScreen() {
           )}
         </Card>
 
+        {/* ---------------------------------------------- 片付け待ちの献立 */}
+        {stalePlans.length > 0 && (
+          <Card href="/plan" title="作ったか教えてください" more="カレンダー">
+            <p className="px-4 pb-2 text-xs text-neutral-500 dark:text-neutral-400">
+              過ぎた日の献立が{stalePlans.length}件、「予定」のままです。
+              このままだと、次に献立を組むときにもう一度出てきます。
+            </p>
+            {staleError && (
+              <p className="px-4 pb-2 text-xs font-semibold text-rose-600">{staleError}</p>
+            )}
+            <ul className="pb-2">
+              {stalePlans.slice(0, STALE_SHOWN).map((p) => (
+                <li key={p.id} className="flex items-center gap-2 px-4 py-1.5">
+                  <span className="w-14 shrink-0 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+                    {p.date.slice(5).replace("-", "/")}
+                  </span>
+                  {/* 名前を入れずにレシピだけ結び付けた献立もあるので、レシピ名で埋める */}
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {p.name ??
+                      (p.recipe_id != null ? recipeNameById.get(p.recipe_id) : null) ??
+                      "(未定)"}
+                  </span>
+                  {/* 押し間違いが痛いので、どちらも高さ44pxの別々の的にする */}
+                  <button
+                    type="button"
+                    disabled={busyPlan === p.id}
+                    onClick={() => void resolveStale(p, true)}
+                    className="h-11 shrink-0 rounded-lg bg-emerald-50 px-3 text-xs font-bold text-emerald-700 disabled:opacity-40 dark:bg-emerald-950/50 dark:text-emerald-300"
+                  >
+                    作った
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyPlan === p.id}
+                    onClick={() => void resolveStale(p, false)}
+                    className="h-11 shrink-0 rounded-lg px-2 text-[11px] font-bold text-neutral-500 disabled:opacity-40 dark:text-neutral-400"
+                  >
+                    作らなかった
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {stalePlans.length > STALE_SHOWN && (
+              <p className="px-4 pb-3 text-[11px] text-neutral-400 dark:text-neutral-500">
+                ほか{stalePlans.length - STALE_SHOWN}件。片付けると繰り上がって出てきます。
+              </p>
+            )}
+          </Card>
+        )}
+
         {/* ---------------------------------------------- 今日の候補 */}
         <Card href="/recipes" title="今日の候補" more="レシピ">
           {candidates.length === 0 ? (
@@ -549,7 +662,7 @@ export function HomeScreen() {
               desc="残っている記録の全部。健康診断・作った記録・レシートの明細もここから"
             />
             <NavRow href="/recipes/ask" title="AIに相談する" desc="献立を相談して、レシピを登録する" />
-            <NavRow href="/handoff" title="チャットから取り込む" desc="Cowork の結果を貼り付けて記録する" />
+            <NavRow href="/handoff" title="チャットから取り込む" desc="レシートを読ませる依頼文を渡し、返ってきた JSON を貼る" />
             <NavRow href="/help" title="使い方" desc="困ったときはここ" last />
           </ul>
         </section>
