@@ -828,6 +828,32 @@ function addPeriods(due: string, repeat: string, n: number): string | null {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+
+// ------------------------------------------------------------ 常備品
+
+/**
+ * 常備品の残り具合を書き換える。
+ *
+ * 【台所で「あと少し」を記録できるようにするため】
+ * これまで常備品はチャットからしか直せなかった。
+ * 鶏がらスープの素が残り少ないと気づくのは**瓶を持っているとき**で、
+ * そこでチャットを開くのは現実的でない。結果、気づきが記録に残らず、
+ * 買い物リストにも出ないまま切らす。
+ *
+ * 書き換えると、買い物リストの「切らしている常備品」の札に出る
+ * (lib/staples.ts)。そこから1タップでリストに入る。
+ */
+export async function setPantryStock(id: number, stock: "ある" | "切れそう" | "切れた") {
+  const supabase = requireClient();
+  const { error } = await supabase
+    .from("pantry")
+    .update({ stock })
+    .eq("id", id)
+    .abortSignal(signal());
+  if (error) throw error;
+  invalidate("pantry");
+}
+
 // ------------------------------------------------------------ レシピ
 
 /**

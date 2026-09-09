@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { LoadNotice, ScreenHeader } from "@/components/ScreenHeader";
+import { setPantryStock } from "@/lib/mutations";
 import { useTable } from "@/lib/use-table";
 import type { Equipment, Pantry, Preference } from "@/lib/types";
 
@@ -17,10 +18,18 @@ import type { Equipment, Pantry, Preference } from "@/lib/types";
  * つまり「なぜトマトが一度も出てこないのか」の答えはここにある。
  * それが画面から見えないと、AIの気まぐれに見えてしまう。
  *
- * 【読むだけの画面にしてある】
- * 直すのはチャット(受け渡しの update / insert)から。
- * ここに編集を足すと、同じ決めごとを直す道が2本になる。
- * どちらが最後に効いたのかを人が追えなくなるので、当面は入口を1本に保つ。
+ * 【常備品だけは、この画面から直せる】
+ * もとは読むだけの画面にしていた(直す道が2本になると、どちらが最後に効いたのか
+ * 追えなくなるため)。だが**残り具合はチャットからでは記録されない**。
+ * 鶏がらスープの素が残り少ないと気づくのは瓶を持っているときで、
+ * そこでチャットを開く人はいない。気づきが消えて、そのまま切らす。
+ *
+ * そこで常備品の「ある / 切れそう / 切れた」だけを、ここから押せるようにした。
+ * 器具・好み・方針は今までどおり読むだけ(こちらは滅多に変わらないので、
+ * 入口を1本に保つ理由がまだ立つ)。
+ *
+ * 【押すたびに切り替えない】。3つを並べて選ばせる。
+ * 回すボタンは押しすぎて通り過ぎる(MoveToInventorySheet で同じ失敗をしている)。
  */
 
 const STOCK_STYLE: Record<Pantry["stock"], string> = {
@@ -64,6 +73,25 @@ export function KitchenScreen() {
     [preferences.rows],
   );
 
+  const [target, setTarget] = useState<Pantry | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const choose = async (p: Pantry, stock: Pantry["stock"]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setPantryStock(p.id, stock);
+      // 往復を待たずに画面へ反映する。次の読み直しでサーバの値に揃う
+      pantry.patch({ ...p, stock });
+      setTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "保存できませんでした");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const short = pantry.rows.filter((p) => p.stock !== "ある");
 
   return (
@@ -95,7 +123,7 @@ export function KitchenScreen() {
 
       <div className="space-y-3 px-4 pt-3">
         <p className="px-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-          献立を相談したときに、AI がこの3つを前提にします。直すのはチャットからです。
+          献立を相談したときに、AI がこの3つを前提にします。常備品は押して直せます。器具と好みはチャットから。
         </p>
 
         {/* -------------------------------------------------- 好み・方針 */}
@@ -149,11 +177,16 @@ export function KitchenScreen() {
         {/* -------------------------------------------------- 常備品 */}
         <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
           <h2 className="px-4 pt-3.5 text-sm font-bold">常備品</h2>
-          <p className="px-4 pb-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+          <p className="px-4 pb-2 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
             買い物リストに載せないもの。
+            <b className="text-neutral-700 dark:text-neutral-200">
+              押すと残り具合を記録できます。
+            </b>
+            「あと少し」は<b>切れそう</b>にしてください。
+            買い物タブに黄色い札が出て、1タップでリストに入ります。
             {short.length > 0 && (
               <b className="ml-1 text-amber-700 dark:text-amber-400">
-                切れそう・切れた {short.length} 件
+                いま 切れそう・切れた {short.length} 件
               </b>
             )}
           </p>
@@ -162,17 +195,21 @@ export function KitchenScreen() {
               <h3 className="text-[11px] font-bold text-neutral-500 dark:text-neutral-400">{category}</h3>
               <ul className="mt-1 flex flex-wrap gap-1.5">
                 {list.map((p) => (
-                  <li
-                    key={p.id}
-                    className={`rounded-lg px-2 py-1 text-xs ${
-                      p.stock === "ある"
-                        ? "bg-neutral-100 dark:bg-neutral-800"
-                        : STOCK_STYLE[p.stock]
-                    }`}
-                  >
-                    {p.staple && <span className="mr-0.5">★</span>}
-                    {p.name}
-                    {p.stock !== "ある" && <span className="ml-1 font-bold">{p.stock}</span>}
+                  <li key={p.id}>
+                    {/* 高さ36pxは、札を詰めて並べたときに隣を踏まない下限 */}
+                    <button
+                      type="button"
+                      onClick={() => setTarget(p)}
+                      className={`h-9 rounded-lg px-2 text-xs active:opacity-60 ${
+                        p.stock === "ある"
+                          ? "bg-neutral-100 dark:bg-neutral-800"
+                          : STOCK_STYLE[p.stock]
+                      }`}
+                    >
+                      {p.staple && <span className="mr-0.5">★</span>}
+                      {p.name}
+                      {p.stock !== "ある" && <span className="ml-1 font-bold">{p.stock}</span>}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -183,6 +220,63 @@ export function KitchenScreen() {
           </p>
         </section>
       </div>
+
+      {/* 残り具合を決めるシート。3つを並べて選ばせる(回すボタンにしない) */}
+      {target && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end">
+          <button
+            type="button"
+            aria-label="閉じる"
+            onClick={() => setTarget(null)}
+            className="absolute inset-0 bg-black/40"
+          />
+          <div className="relative rounded-t-2xl bg-white px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] dark:bg-neutral-900">
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
+            <p className="mb-1 text-center text-base font-bold">{target.name}</p>
+            <p className="mb-4 text-center text-[11px] text-neutral-500 dark:text-neutral-400">
+              いま {target.stock}
+            </p>
+
+            {error && (
+              <p className="mb-2 text-center text-xs font-semibold text-rose-600">{error}</p>
+            )}
+
+            <div className="space-y-2">
+              {(["ある", "切れそう", "切れた"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void choose(target, s)}
+                  className={`h-14 w-full rounded-xl text-base font-bold disabled:opacity-40 ${
+                    target.stock === s
+                      ? "bg-emerald-600 text-white"
+                      : "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                  }`}
+                >
+                  {s}
+                  {s === "切れそう" && (
+                    <span className="ml-2 text-xs font-normal opacity-80">(あと少し)</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <p className="mt-3 text-center text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+              「切れそう」「切れた」にすると、<b>買い物タブの上に黄色い札</b>が出ます。
+              そこから1タップで買い物リストに入ります。
+            </p>
+
+            <button
+              type="button"
+              onClick={() => setTarget(null)}
+              className="mt-4 h-14 w-full rounded-xl bg-neutral-100 text-base font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            >
+              やめる
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

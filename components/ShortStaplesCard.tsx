@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { addItem } from "@/lib/store";
 import { restockReason, type ShortStaple } from "@/lib/staples";
@@ -103,6 +104,11 @@ export function ShortStaplesCard({
           あとで
         </button>
       </div>
+      <p className="mt-2 text-center text-[11px] text-amber-800/80 dark:text-amber-200/70">
+        <Link href="/records/kitchen" className="underline">
+          常備品の一覧から「あと少し」を記録する
+        </Link>
+      </p>
     </section>
   );
 }
