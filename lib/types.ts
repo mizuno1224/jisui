@@ -91,6 +91,30 @@ export const LOCATION_INFO: Record<Location, { full: string; note: string }> = {
   常温: { full: "冷暗所", note: "玉ねぎ・いも類・未開封の調味料・乾物" },
 };
 
+/**
+ * 食材の正体(supabase/22_foods.sql)。
+ *
+ * 在庫やレシピ材料の「名前」はレシートから来るので毎回ちがう。
+ * 正体だけをここに持ち、突き合わせは **food_id の一致**で行う。
+ * 名前で突き合わせていたころは「豚ひき肉」と「国産豚ミンチ」が別物になり、
+ * 家にあるのに「足りない」と出ていた。
+ */
+export type Food = {
+  id: number;
+  household_id: string;
+  /** 代表名。画面に出るのはこれ */
+  name: string;
+  /** よみ。「たまねぎ」で「玉ねぎ」を引く */
+  kana: string | null;
+  /** 食材 / 調味料 / 非食材。非食材(菓子・飲料)はレシピの判定から外れる */
+  kind: "食材" | "調味料" | "非食材";
+  section: string;
+  location: Location | null;
+  /** 商品名の別名。人が食材を選ぶたびにここへ足していく */
+  aliases: string[];
+  created_at: string;
+};
+
 export type InventoryItem = {
   id: ItemId;
   household_id: string;
@@ -107,6 +131,8 @@ export type InventoryItem = {
    * supabase/21_inventory_pack.sql
    */
   pack_size: number | null;
+  /** 食材の正体(foods.id)。決まっていないうちは null */
+  food_id: number | null;
   updated_at: string;
 };
 
@@ -156,6 +182,8 @@ export type RecipeIngredient = {
   qty: number | null;
   unit: string | null;
   optional: boolean;
+  /** 食材の正体(foods.id)。決まっていないうちは null */
+  food_id: number | null;
 };
 
 export type MealPlan = {
@@ -499,6 +527,8 @@ export type Pantry = {
   /** お決まり食材(毎回チェックする定番) */
   staple: boolean;
   memo: string | null;
+  /** 食材の正体(foods.id)。決まっていないうちは null */
+  food_id: number | null;
 };
 
 /** 好み・方針。kind が「苦手」のものは絶対に使わない。 */

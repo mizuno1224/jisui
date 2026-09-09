@@ -99,11 +99,23 @@ export const EQUIPMENT_LABELS = [...EQUIPMENT_FILTERS.map((f) => f.label), "火�
 /** 任意の材料は、無くても料理は成立するので「足りない」とは言わない。 */
 export type Availability = "在庫あり" | "常備品" | "足りない" | "任意";
 
-export type StockRow = { name: string; qty: number | null };
-export type PantryRow = { name: string; stock: string };
+export type StockRow = { name: string; qty: number | null; food_id?: number | null };
+export type PantryRow = { name: string; stock: string; food_id?: number | null };
 
 /**
  * 材料1つが家にあるか。
+ *
+ * 【まず food_id で見る。名前は最後の手段】
+ * 在庫の名前はレシートから来るので毎回ちがう。実データでは
+ * 「豚ひき肉」と「国産豚ミンチ」、「焼のり(遠赤焙焼)」と「遠赤焙焼 焼のり」が
+ * 別物と判定され、**家にあるのに「足りない」**と出ていた。
+ * 食材の正体(foods.id)が両側に付いていれば、名前がどう書かれていても当たる。
+ *
+ * 【まだ正体が決まっていない行のために、名前の一致も残す】
+ * food_id は null を許してある(推測で埋めないため)。
+ * 移行の途中や、レシートで来たばかりの商品は正体が空のことがある。
+ * そこで id が付いていない側は、これまでどおり名前で当てる。
+ * **片方でも id があって一致すれば、そこで決まり**。名前は見ない。
  *
  * 【qty が null は「ある」に倒す】。数を数えていないもの(調味料の小袋など)で、
  * 0 とは違う。ここを 0 扱いにすると、あるものが買い物リストに並ぶ。
@@ -112,16 +124,29 @@ export type PantryRow = { name: string; stock: string };
  * 常備品(調味料など)は買い物リストに載せない決まりなので別扱いにする(設計書5)。
  */
 export function availabilityOf(
-  ing: Pick<RecipeIngredient, "name" | "optional">,
+  ing: Pick<RecipeIngredient, "name" | "optional"> & { food_id?: number | null },
   inventory: StockRow[],
   pantry: PantryRow[],
 ): Availability {
-  if (inventory.some((inv) => (inv.qty ?? 1) > 0 && looseMatch(inv.name, ing.name))) {
-    return "在庫あり";
-  }
-  if (pantry.some((p) => p.stock !== "切れた" && looseMatch(p.name, ing.name))) {
-    return "常備品";
-  }
+  const wanted = ing.food_id ?? null;
+  /*
+   * 【両側に正体があるときは、それだけで決める。名前は見ない】
+   *
+   * ここを「id が一致 or 名前が一致」にすると、**わざと分けた食材が混ざる。**
+   *   生鮭 と 塩銀鮭          … 塩分が倍ちがうのに、名前は似ている
+   *   ほうれん草 と 冷凍ほうれん草 … 表記ゆれ辞書がどちらも同じ語に寄せてしまう
+   * 分けた意味が消えるので、正体が分かっている行では名前を当てにしない。
+   *
+   * どちらかに正体が無いときだけ、これまでどおり名前で当てる
+   * (移行の途中や、レシートで来たばかりで正体が空の行のため)。
+   */
+  const match = (row: { name: string; food_id?: number | null }) =>
+    wanted != null && row.food_id != null
+      ? row.food_id === wanted
+      : looseMatch(row.name, ing.name);
+
+  if (inventory.some((inv) => (inv.qty ?? 1) > 0 && match(inv))) return "在庫あり";
+  if (pantry.some((p) => p.stock !== "切れた" && match(p))) return "常備品";
   return ing.optional ? "任意" : "足りない";
 }
 

@@ -99,6 +99,11 @@ function withPack<T extends object>(row: T, packSize: number | null | undefined)
   return packSize == null ? row : { ...row, pack_size: packSize };
 }
 
+/** food_id も同じ扱い。22_foods.sql を流すまで列が無いので、あるときだけ送る。 */
+function withFood<T extends object>(row: T, foodId: number | null | undefined): T {
+  return foodId == null ? row : { ...row, food_id: foodId };
+}
+
 function setItems(items: InventoryItem[]) {
   emit({ items: sortInventory(items) });
 }
@@ -237,7 +242,8 @@ async function sendOp(op: InvOp) {
       const { data, error } = await supabase
         .from(TABLE)
         .insert(
-          withPack(
+          withFood(
+            withPack(
             {
               household_id: item.household_id,
               name: item.name,
@@ -250,6 +256,8 @@ async function sendOp(op: InvOp) {
               updated_at: item.updated_at,
             },
             item.pack_size,
+            ),
+            item.food_id,
           ),
         )
         .select()
@@ -451,6 +459,8 @@ export type NewInventory = {
   price?: number | null;
   /** 満タンのときの個数。6Pチーズなら6。数えないものは省く */
   packSize?: number | null;
+  /** 食材の正体(foods.id)。レシートから入れるときはここで決まる */
+  foodId?: number | null;
 };
 
 /**
@@ -480,6 +490,7 @@ export async function addItem(input: NewInventory): Promise<InventoryItem> {
     bought_on: input.bought_on ?? null,
     price: input.price ?? null,
     pack_size: packSize,
+    food_id: input.foodId ?? null,
     updated_at: new Date().toISOString(),
   };
   await local.saveRows(STORE, [row]);
