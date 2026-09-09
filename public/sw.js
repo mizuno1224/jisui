@@ -57,7 +57,11 @@
 //      上げないと、古いキャッシュを持った端末は数量の打ち込みのままになる。
 //      あわせて「期限が近いものが N 点」から数量0の行を外した。
 //      使い切った食材の期限まで赤で数えていた(実測19点のうち9点)。
-const VERSION = "v34";
+const VERSION = "v35";
+// v35: 【今日の献立からレシピを押しても反応しない】を直した。
+//      Service Worker が、控えの無い住所に対してホーム画面を身代わりに返していた。
+//      アプリで唯一 APP_SHELL に入れられない /recipes/(番号) だけが該当し、
+//      住所は変わるのに中身はホームのまま = 反応しないように見えていた。
 // v34: 横に払う操作をアプリ全体に広げた(在庫の区画・レシピの普段/弁当・
 //      家計と資産の月・健康の夫/妻)。あわせて名前の突き合わせが
 //      「の」を無視するようにした(「桃屋 きざみしょうが」と
@@ -142,6 +146,21 @@ async function cacheFirst(request) {
   return response;
 }
 
+/*
+ * ネットワークを先に試し、駄目なら控えを返す。
+ *
+ * 【「/」を身代わりに返さないこと】
+ * ここは長いあいだ、失敗したときに (キャッシュ) || (「/」) を返していた。
+ * その「/」はホーム画面の中身なので、**求められたものと別の物を渡していた。**
+ *
+ * とくに ?_rsc= の要求(タブ移動でNext.jsが取りにいく部分描画のデータ)で
+ * ホーム画面の HTML を返すと、受け取った側は読めずに黙って諦める。
+ * 画面には何も起こらない。**「押しても反応しない」がこれ。**
+ * 実際に、今日の献立からレシピを押しても何も起きなかった。
+ *
+ * 控えが無いなら、正直に失敗させる。そのほうが Next.js は
+ * 素直にページごと読み込み直しにいくので、結果として先へ進める。
+ */
 async function networkFirst(request, { timeout } = {}) {
   const cache = await caches.open(RUNTIME_CACHE);
   try {
@@ -154,15 +173,30 @@ async function networkFirst(request, { timeout } = {}) {
     if (response && response.ok) cache.put(request, response.clone());
     return response;
   } catch (err) {
-    const cached = (await caches.match(request)) || (await caches.match("/"));
+    const cached = await caches.match(request);
     if (cached) return cached;
     throw err;
   }
 }
 
-/** キャッシュを即返し、裏で最新に入れ替える。起動の体感がこれで決まる。 */
+/**
+ * キャッシュを即返し、裏で最新に入れ替える。起動の体感がこれで決まる。
+ *
+ * 【「/」に落とすのは、本当に最後だけ】
+ * ここも以前は、控えを探すその場で「/」を身代わりにしていた。
+ * すると【一度も開いたことのない住所】は、通信を試しもせずに
+ * ホーム画面が返っていた。アプリの中で唯一そうなるのが
+ * **レシピの詳細(/recipes/123)** で、住所だけ変わって中身はホーム、
+ * という状態になる。人からは「押しても反応しない」ように見える。
+ * ほかのタブは全部 APP_SHELL に入れてあるので、ここだけが穴だった。
+ *
+ * 正しい順番はこう:
+ *   1. その住所ぴったりの控えがあれば即返す(速さのため)
+ *   2. 無ければ通信を待つ
+ *   3. 通信も駄目(=圏外)なら、最後の手段としてホームの殻を返す
+ */
 async function staleWhileRevalidate(request) {
-  const cached = (await caches.match(request)) || (await caches.match("/"));
+  const cached = await caches.match(request);
   const fetching = fetch(request)
     .then(async (response) => {
       if (response && response.ok) {
@@ -178,7 +212,7 @@ async function staleWhileRevalidate(request) {
     fetching,
     new Promise((resolve) => setTimeout(() => resolve(null), NAV_TIMEOUT_MS)),
   ]);
-  return fresh || (await fetching) || Response.error();
+  return fresh || (await fetching) || (await caches.match("/")) || Response.error();
 }
 
 self.addEventListener("fetch", (event) => {
