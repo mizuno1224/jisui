@@ -1,11 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { addMany } from "@/lib/inventory-store";
 import { todayISO } from "@/lib/dates";
 import { removeItem as removeShoppingItem } from "@/lib/store";
-import { guessSection } from "@/lib/matching";
-import { LOCATIONS, LOCATION_INFO, type Location, type ShoppingItem } from "@/lib/types";
+import { countUnits } from "@/lib/food-count";
+import { guessSection, looseMatch } from "@/lib/matching";
+import { useTable } from "@/lib/use-table";
+import {
+  LOCATIONS,
+  LOCATION_INFO,
+  type Location,
+  type RecipeIngredient,
+  type ShoppingItem,
+} from "@/lib/types";
 
 /**
  * 野菜売り場で買っても、冷蔵庫に入れずに冷暗所へ置くもの。
@@ -127,6 +135,28 @@ export function MoveToInventorySheet({
   const [busy, setBusy] = useState(false);
 
   /*
+   * どの食材を「個数で数えるか」は、レシピの書き方から決まる(lib/food-count.ts)。
+   * 買い物リストの品名から食材を引けないので、名前で当てる簡易版にしてある
+   * (この画面は買った直後の一度きりなので、外れても次の画面で直せる)。
+   */
+  const ingredients = useTable<RecipeIngredient>("recipe_ingredients");
+  const units = useMemo(() => countUnits(ingredients.rows), [ingredients.rows]);
+  const nameOfFood = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const i of ingredients.rows) {
+      if (i.food_id != null && units.has(i.food_id)) m.set(i.name, units.get(i.food_id)!);
+    }
+    return m;
+  }, [ingredients.rows, units]);
+  /** その品目を数えるなら単位、数えないなら null */
+  const countUnit = (item: ShoppingItem): string | null => {
+    for (const [name, unit] of nameOfFood) {
+      if (looseMatch(name, item.item)) return unit;
+    }
+    return null;
+  };
+
+  /*
    * 以前は押すたびに次の区画へ回すボタンだった。3区分のときは最大2回で
    * 目的の区画に着いたが、5区画になると最大4回押すことになり、
    * しかも押しすぎると通り過ぎてもう一周する。買った物が10点あれば効く差なので、
@@ -148,11 +178,6 @@ export function MoveToInventorySheet({
       ),
     );
 
-  const setUnit = (id: string, unit: string) =>
-    setRows((prev) =>
-      prev.map((r) => (String(r.source.id) === id ? { ...r, unit: unit.trim() || null } : r)),
-    );
-
   const toStock = rows.filter((r) => r.location !== SKIP);
 
   const submit = async () => {
@@ -163,7 +188,9 @@ export function MoveToInventorySheet({
         toStock.map((r) => ({
           name: r.source.item,
           qty: r.qty,
-          unit: r.unit,
+          // 単位はレシピが使っているものに揃える(「本」「個」)。
+          // 揃っていないと在庫画面の「4 / 6本」が別の言葉で出る
+          unit: countUnit(r.source) ?? r.unit,
           location: r.location as Location,
           bought_on: today,
         })),
@@ -238,17 +265,15 @@ export function MoveToInventorySheet({
               </div>
 
               {/*
-               * 【袋の中身の数を、ここで入れる】
+               * 【個数を聞くのは、レシピが数える食材だけ】
                *
-               * 買い物リストの「なす 3本」は**買う前の見込み**でしかない。
-               * 実際に袋を開けたら2本だった、ということが起きる(実際に起きた)。
-               * 買った直後のここが、いちばん正確に数えられる場面。
-               *
-               * ここで入れた数は【満タンの数】にもなる(lib/inventory-store.ts の addItem)。
-               * 在庫画面では「4 / 4本」と出て、使うたびにスライダーで減らせる。
-               * 在庫に入れないもの(惣菜・日用品)では、数を聞いても意味がないので隠す。
+               * なす「3本」ピーマン「4個」たまご「10個」は、残りの本数が
+               * 献立に効く。**小松菜「1袋」しめじ「1袋」は使い切りなので、
+               * 葉が何枚あるかを数えても意味がない。**
+               * 全部に聞くと、意味の無い入力を毎回させることになる。
+               * どちらかは lib/food-count.ts がレシピの単位から決める。
                */}
-              {r.location !== SKIP && (
+              {r.location !== SKIP && (countUnit(r.source) ? (
                 <div className="mt-1.5 flex items-center gap-2 pl-1">
                   <span className="shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">
                     袋の中身
@@ -262,18 +287,16 @@ export function MoveToInventorySheet({
                     aria-label={`${r.source.item}の個数`}
                     className="h-11 w-16 rounded-lg border border-neutral-300 bg-white px-2 text-center text-sm dark:border-neutral-700 dark:bg-neutral-800"
                   />
-                  <input
-                    value={r.unit ?? ""}
-                    onChange={(e) => setUnit(String(r.source.id), e.target.value)}
-                    placeholder="本"
-                    aria-label={`${r.source.item}の単位`}
-                    className="h-11 w-14 rounded-lg border border-neutral-300 bg-white px-2 text-center text-sm dark:border-neutral-700 dark:bg-neutral-800"
-                  />
+                  <span className="shrink-0 text-sm font-semibold">{countUnit(r.source)}</span>
                   <span className="min-w-0 flex-1 text-[11px] leading-tight text-neutral-400 dark:text-neutral-500">
                     袋を開けて数えた数
                   </span>
                 </div>
-              )}
+              ) : (
+                <p className="mt-1 pl-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+                  1袋まるごとで記録します(使い切る食材なので個数は数えません)
+                </p>
+              ))}
             </li>
           ))}
         </ul>
