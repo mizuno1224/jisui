@@ -21,6 +21,7 @@ import { useTable } from "@/lib/use-table";
 import {
   LOCATIONS,
   LOCATION_INFO,
+  type Food,
   type InventoryItem,
   type Location,
   type MealPlan,
@@ -162,6 +163,7 @@ export function InventoryScreen() {
   const [addOpen, setAddOpen] = useState(false);
 
   // 「使う予定の献立」を出すために、予定とレシピ材料を読む
+  const foods = useTable<Food>("foods");
   const plans = useTable<MealPlan>("meal_plan");
   const ingredients = useTable<RecipeIngredient>("recipe_ingredients");
 
@@ -230,6 +232,32 @@ export function InventoryScreen() {
    */
   const inStock = byLocation.filter((i) => (i.qty ?? 0) > 0);
   const outOfStock = byLocation.filter((i) => (i.qty ?? 0) === 0);
+
+  /*
+   * 【調味料と菓子を、食材と分けて出す】
+   *
+   * 冷蔵の棚を写真から入れ直したら、22点のうち11点が調味料になった
+   * (オイスターソース・中濃ソース・味ぽん・白だし・味噌…)。
+   * 冷蔵庫の前で見たいのは**今日使う食材**なのに、それが調味料に埋もれる。
+   *
+   * 消しはしない。**畳んでおく。** 数量0の行と同じ考え方で、
+   * 開けば今までどおり出るし、切らしたときには気づける。
+   *
+   * 何が調味料かは、名前ではなく **食材の正体(foods.kind)** で決まる。
+   * 「ミツカン 味ぽん」のような商品名からでも正しく分かれる。
+   */
+  const kindOf = useMemo(() => {
+    const map = new Map<number, Food["kind"]>();
+    for (const f of foods.rows) map.set(f.id, f.kind);
+    return map;
+  }, [foods.rows]);
+
+  /** 正体が決まっていない行は【食材の側に出す】。片付けが要るので、目に付くほうがよい。 */
+  const isFood = (i: InventoryItem) =>
+    i.food_id == null || (kindOf.get(i.food_id) ?? "食材") === "食材";
+
+  const foodRows = inStock.filter(isFood);
+  const seasoningRows = inStock.filter((i) => !isFood(i));
 
   /*
    * 期限が近いものの件数。
@@ -361,7 +389,7 @@ export function InventoryScreen() {
         />
 
         <ul className="mt-3 divide-y divide-neutral-100 border-y border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
-          {inStock.map((item) => (
+          {foodRows.map((item) => (
             <InventoryRow
               key={String(item.id)}
               item={item}
@@ -371,6 +399,30 @@ export function InventoryScreen() {
             />
           ))}
         </ul>
+
+        {/*
+          調味料と菓子は畳んでおく。冷蔵庫の前で見たいのは食材のほうで、
+          そこに調味料が混ざると探せなくなる。切らしたときに気づけるよう、
+          消さずに開けば出る形にする(数量0の行と同じ考え方)。
+        */}
+        {seasoningRows.length > 0 && (
+          <details className="mt-3 border-y border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+            <summary className="cursor-pointer px-4 py-3.5 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+              調味料・そのほか {seasoningRows.length} 件
+            </summary>
+            <ul className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+              {seasoningRows.map((item) => (
+                <InventoryRow
+                  key={String(item.id)}
+                  item={item}
+                  plannedUse={plannedUseOf(item.name)}
+                  showLocation={Boolean(query.trim())}
+                  onOpen={setTarget}
+                />
+              ))}
+            </ul>
+          </details>
+        )}
 
         {/* 切らしているものは畳んでおく。消してはいない(買い物の手がかりとして残す) */}
         {outOfStock.length > 0 && (
