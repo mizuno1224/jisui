@@ -138,6 +138,21 @@ export function MoveToInventorySheet({
       prev.map((r) => (String(r.source.id) === id ? { ...r, location } : r)),
     );
 
+  /** 袋を開けて数えた数。空欄や文字は0として扱う(在庫は0でも記録できる) */
+  const setQty = (id: string, value: string) =>
+    setRows((prev) =>
+      prev.map((r) =>
+        String(r.source.id) === id
+          ? { ...r, qty: Number.isNaN(Number(value)) ? r.qty : Math.max(0, Number(value)) }
+          : r,
+      ),
+    );
+
+  const setUnit = (id: string, unit: string) =>
+    setRows((prev) =>
+      prev.map((r) => (String(r.source.id) === id ? { ...r, unit: unit.trim() || null } : r)),
+    );
+
   const toStock = rows.filter((r) => r.location !== SKIP);
 
   const submit = async () => {
@@ -170,10 +185,16 @@ export function MoveToInventorySheet({
       <div className="relative max-h-[85dvh] overflow-y-auto rounded-t-2xl bg-white px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] dark:bg-neutral-900">
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
         <h2 className="text-base font-bold">買い物をおわる</h2>
-        <p className="mt-1 text-xs text-neutral-500">
+        <p className="mt-1 text-xs leading-relaxed text-neutral-500">
           チェックした {rows.length} 件をリストから片付けます。
           しまうものは置き場所を選ぶと在庫に入り、
           惣菜や日用品は<b>「入れない」</b>を選べば消えるだけです。
+        </p>
+        <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+          <b>袋の中身の数は、ここで入れてください。</b>
+          買い物リストの「なす 3本」は買う前の見込みなので、
+          袋を開けて2本なら <b>2</b> に直します。
+          入れた数がそのまま<b>満タンの数</b>になり、在庫画面のスライダーで減らせます。
         </p>
         {/*
          * 推測の癖を先に言っておく。ここに書いていないと
@@ -186,38 +207,73 @@ export function MoveToInventorySheet({
 
         <ul className="mt-3 divide-y divide-neutral-100 dark:divide-neutral-800">
           {rows.map((r) => (
-            <li key={String(r.source.id)} className="flex items-center gap-2 py-2.5">
-              <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
-                {r.source.item}
-              </span>
-              <span className="shrink-0 text-xs text-neutral-500">
-                {r.qty}
-                {r.unit ?? ""}
-              </span>
+            <li key={String(r.source.id)} className="py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
+                  {r.source.item}
+                </span>
+                {/*
+                 * 見た目は今までのチップのまま(appearance-none で端末の三角を消す)。
+                 * 高さは 44px。濡れた指で隣の行を触らないための下限。
+                 */}
+                <select
+                  aria-label={`${r.source.item}の置き場所`}
+                  value={r.location}
+                  onChange={(e) =>
+                    setLocation(String(r.source.id), e.target.value as Location | typeof SKIP)
+                  }
+                  className={`h-11 w-[5.5rem] shrink-0 appearance-none rounded-lg text-center text-xs font-bold ${
+                    r.location === SKIP
+                      ? "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
+                      : "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                  }`}
+                >
+                  {LOCATIONS.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                  <option value={SKIP}>{SKIP}</option>
+                </select>
+              </div>
+
               {/*
-               * 見た目は今までのチップのまま(appearance-none で端末の三角を消す)。
-               * 幅 4.5rem は 2 文字ぶん + 余白で、5 区画のどれを選んでも変わらない。
-               * 高さは 44px。濡れた指で隣の行を触らないための下限。
+               * 【袋の中身の数を、ここで入れる】
+               *
+               * 買い物リストの「なす 3本」は**買う前の見込み**でしかない。
+               * 実際に袋を開けたら2本だった、ということが起きる(実際に起きた)。
+               * 買った直後のここが、いちばん正確に数えられる場面。
+               *
+               * ここで入れた数は【満タンの数】にもなる(lib/inventory-store.ts の addItem)。
+               * 在庫画面では「4 / 4本」と出て、使うたびにスライダーで減らせる。
+               * 在庫に入れないもの(惣菜・日用品)では、数を聞いても意味がないので隠す。
                */}
-              <select
-                aria-label={`${r.source.item}の置き場所`}
-                value={r.location}
-                onChange={(e) =>
-                  setLocation(String(r.source.id), e.target.value as Location | typeof SKIP)
-                }
-                className={`h-11 w-[5.5rem] shrink-0 appearance-none rounded-lg text-center text-xs font-bold ${
-                  r.location === SKIP
-                    ? "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
-                    : "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                }`}
-              >
-                {LOCATIONS.map((loc) => (
-                  <option key={loc} value={loc}>
-                    {loc}
-                  </option>
-                ))}
-                <option value={SKIP}>{SKIP}</option>
-              </select>
+              {r.location !== SKIP && (
+                <div className="mt-1.5 flex items-center gap-2 pl-1">
+                  <span className="shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">
+                    袋の中身
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    value={r.qty}
+                    onChange={(e) => setQty(String(r.source.id), e.target.value)}
+                    aria-label={`${r.source.item}の個数`}
+                    className="h-11 w-16 rounded-lg border border-neutral-300 bg-white px-2 text-center text-sm dark:border-neutral-700 dark:bg-neutral-800"
+                  />
+                  <input
+                    value={r.unit ?? ""}
+                    onChange={(e) => setUnit(String(r.source.id), e.target.value)}
+                    placeholder="本"
+                    aria-label={`${r.source.item}の単位`}
+                    className="h-11 w-14 rounded-lg border border-neutral-300 bg-white px-2 text-center text-sm dark:border-neutral-700 dark:bg-neutral-800"
+                  />
+                  <span className="min-w-0 flex-1 text-[11px] leading-tight text-neutral-400 dark:text-neutral-500">
+                    袋を開けて数えた数
+                  </span>
+                </div>
+              )}
             </li>
           ))}
         </ul>
